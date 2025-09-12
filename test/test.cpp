@@ -15,7 +15,7 @@ void response(std::uint8_t cmd, const std::vector<std::uint8_t>& payload)
 
 int main(int argc, char **argv)
 {
-    std::unique_ptr<dpp_api::DppDevice> dppDevice = dpp_api::DppDevice::find("E66430A64B2E6538");
+    std::unique_ptr<dpp_api::DppDevice> dppDevice = dpp_api::DppDevice::findAtIndex(0);
     if (dppDevice)
     {
         printf("FOUND!\n");

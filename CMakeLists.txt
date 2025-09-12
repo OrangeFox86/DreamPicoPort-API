@@ -6,4 +6,5 @@ set(LIBUSB_BUILD_SHARED_LIBS OFF)
 
 add_subdirectory("ext/libusb-cmake/")
 add_subdirectory("src")
+add_subdirectory("test")
 

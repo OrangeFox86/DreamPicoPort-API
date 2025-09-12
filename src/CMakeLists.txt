@@ -12,7 +12,4 @@ target_link_libraries(dream_pico_port_api
 
 target_include_directories(dream_pico_port_api
   PUBLIC
-    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>"
-    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>/../Common"
-    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/hal/Usb>"
-    "${PROJECT_SOURCE_DIR}/inc")
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")

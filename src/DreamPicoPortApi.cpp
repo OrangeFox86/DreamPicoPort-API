@@ -8,10 +8,12 @@
 #include <thread>
 #include <mutex>
 #include <functional>
+#include <algorithm>
 
 namespace dpp_api
 {
 
+//! Deleter for unique_pointer of a libusb_context
 struct LibusbContextDeleter
 {
     void operator()(libusb_context* p) const
@@ -20,6 +22,7 @@ struct LibusbContextDeleter
     }
 };
 
+//! Deleter for unique_pointer of a libusb_device_handle
 struct LibusbDeviceHandleDeleter
 {
     void operator()(libusb_device_handle* handle) const
@@ -28,6 +31,7 @@ struct LibusbDeviceHandleDeleter
     }
 };
 
+//! Deleter for unique_pointer of a libusb_device*
 struct LibusbDeviceListDeleter
 {
     void operator()(libusb_device** devs) const
@@ -36,6 +40,7 @@ struct LibusbDeviceListDeleter
     }
 };
 
+//! Deleter for unique_pointer of a libusb_config_descriptor
 struct LibusbConfigDescriptorDeleter
 {
     void operator()(libusb_config_descriptor* config) const
@@ -44,6 +49,16 @@ struct LibusbConfigDescriptorDeleter
     }
 };
 
+//! Deleter for unique_pointer of a libusb_transfer
+struct LibusbTransferDeleter
+{
+    void operator()(libusb_transfer* transfer) const
+    {
+        libusb_free_transfer(transfer);
+    }
+};
+
+//! Holds libusb device list
 class LibusbDeviceList
 {
 public:
@@ -121,6 +136,7 @@ private:
     std::unique_ptr<libusb_device*, LibusbDeviceListDeleter> mLibusbDeviceList;
 };
 
+//! @return a new unique_pointer to a libusb_context
 static std::unique_ptr<libusb_context, LibusbContextDeleter> make_libusb_context()
 {
     std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext;
@@ -137,6 +153,7 @@ static std::unique_ptr<libusb_context, LibusbContextDeleter> make_libusb_context
     return libusbContext;
 }
 
+//! @return a new unique_pointer to a libusb_device_handle
 static std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> make_libusb_device_handle(libusb_device* dev)
 {
     std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> deviceHandle;
@@ -153,11 +170,18 @@ static std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> make_lib
     return deviceHandle;
 }
 
+//! Forward declaration of transfer complete callback
+//! @param[in] transfer The transfer which completed
 void LIBUSB_CALL on_libusb_transfer_complete(libusb_transfer *transfer);
 
 class DppDeviceImp
 {
 public:
+    //! Constructor
+    //! @param[in] serial Serial number of this device
+    //! @param[in] desc The device descriptor of this device
+    //! @param[in] libusbContext The context of libusb
+    //! @param[in] libusbDeviceHandle Handle to the device
     DppDeviceImp(
         const std::string& serial,
         const libusb_device_descriptor& desc,
@@ -175,6 +199,7 @@ public:
     {
     }
 
+    //! Destructor
     ~DppDeviceImp()
     {
         closeInterface();
@@ -184,6 +209,8 @@ public:
         }
     }
 
+    //! Opens the vendor interface of the DreamPicoPort
+    //! @return true if interface was successfully claimed or was already claimed
     bool openInterface()
     {
         std::lock_guard<std::mutex> lock(mMutex);
@@ -201,6 +228,7 @@ public:
             int r = libusb_get_active_config_descriptor(libusb_get_device(mLibusbDeviceHandle.get()), &config);
             if (r < 0)
             {
+                mLastLibusbError = r;
                 return false;
             }
             configDescriptor.reset(config);
@@ -219,6 +247,7 @@ public:
 
         if (!selectedInterface || selectedInterface->num_altsetting <= 0)
         {
+            mLastLibusbError = LIBUSB_ERROR_NOT_FOUND;
             return false;
         }
 
@@ -244,6 +273,7 @@ public:
 
         if (outEndpoint < 0 || inEndpoint < 0)
         {
+            mLastLibusbError = LIBUSB_ERROR_NOT_FOUND;
             return false;
         }
 
@@ -255,6 +285,7 @@ public:
         if (r < 0)
         {
             // Handle error - interface claim failed
+            mLastLibusbError = r;
             return false;
         }
 
@@ -274,6 +305,7 @@ public:
         {
             // Handle control transfer error
             libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
+            mLastLibusbError = r;
             return false;
         }
 
@@ -281,6 +313,11 @@ public:
         return true;
     }
 
+    //! Sends data on the vendor interface
+    //! @param[in] addr The return address
+    //! @param[in] cmd The command to set
+    //! @param[in] payload The payload for the command
+    //! @return true if data was successfully sent
     bool send(std::uint64_t addr, std::uint8_t cmd, const std::vector<std::uint8_t>& payload)
     {
         if (!openInterface())
@@ -333,15 +370,32 @@ public:
             1000  // timeout in milliseconds
         );
 
-        return r >= 0 && transferred == static_cast<int>(data.size());
+        if (r < 0)
+        {
+            mLastLibusbError = r;
+            return false;
+        }
+        else if (transferred != static_cast<int>(data.size()))
+        {
+            r = LIBUSB_ERROR_IO;
+            return false;
+        }
+
+        return true;
     }
 
+    //! Converts 2 bytes in network order to a uint16 value in host order
+    //! @param[in] payload Pointer to the beginning of the 2-byte sequence
+    //! @return the converted uint16 value
     static std::uint16_t bytesToUint16(const void* payload)
     {
         const std::uint8_t* p8 = reinterpret_cast<const std::uint8_t*>(payload);
         return (static_cast<std::uint16_t>(p8[0]) << 8 | p8[1]);
     }
 
+    //! Converts a uint16 value from host order int a byte buffer in network order
+    //! @param[out] out The buffer to write the next 2 bytes to
+    //! @param[in] data The uint16 value to convert
     static void uint16ToBytes(void* out, std::uint16_t data)
     {
         std::uint8_t* p8 = reinterpret_cast<std::uint8_t*>(out);
@@ -349,6 +403,11 @@ public:
         *p8 = data & 0xFF;
     }
 
+    //! Compute CRC16 over a buffer using a seed value
+    //! @param[in] seed The seed value to start with
+    //! @param[in] buffer Pointer to byte array
+    //! @param[in] bufLen Number of bytes to read from buffer
+    //! @return CRC16 value
     static std::uint16_t computeCrc16(std::uint16_t seed, const void* buffer, std::uint16_t bufLen)
     {
         std::uint16_t crc = seed;
@@ -373,11 +432,16 @@ public:
         return crc;
     }
 
+    //! Compute CRC16 over a buffer
+    //! @param[in] buffer Pointer to byte array
+    //! @param[in] bufLen Number of bytes to read from buffer
+    //! @return CRC16 value
     static std::uint16_t computeCrc16(const void* buffer, std::uint16_t bufLen)
     {
         return computeCrc16(0xFFFFU, buffer, bufLen);
     }
 
+    //! Process data from mCombinedReceiveBuffer into packets
     void processPackets()
     {
         while (mCombinedReceiveBuffer.size() >= kMinPacketSize)
@@ -499,7 +563,9 @@ public:
         }
     }
 
-    void transferComplete(libusb_transfer *transfer)
+    //! Called when a libusb read transfer completed
+    //! @param[in] transfer The transfer that completed
+    void transferComplete(std::unique_ptr<libusb_transfer, LibusbTransferDeleter>&& transfer)
     {
         if (mRxFn)
         {
@@ -519,23 +585,27 @@ public:
         if (mInterfaceClaimed)
         {
             // Submit new transfer
-            int r = libusb_submit_transfer(transfer);
+            int r = libusb_submit_transfer(transfer.get());
             if (r < 0)
             {
-                libusb_free_transfer(transfer);
+                // Failure
+                mLastLibusbError = r;
                 closeInterface();
+                return;
             }
-        }
-        else
-        {
-            libusb_free_transfer(transfer);
-        }
 
+            // Release control so it won't be freed
+            transfer.release();
+        }
     }
 
+    //! Starts the read thread
+    //! @param[in] rxFn The function to call when a full packet is received
+    //! @param[in] completeFn The function to call on disconnect
+    //! @return true if interface was open or opened and read thread was started
     bool beginRead(
         const std::function<void(uint64_t, uint8_t, const std::vector<std::uint8_t>&)>& rxFn,
-        const std::function<void()>& completeFn
+        const std::function<void(const char*)>& completeFn
     )
     {
         if (!openInterface())
@@ -544,17 +614,28 @@ public:
         }
 
         libusb_transfer *transfer = libusb_alloc_transfer(0); // 0 for default number of ISO packets
+        std::unique_ptr<libusb_transfer, LibusbTransferDeleter> transferPtr(transfer);
         if (!transfer)
         {
+            mLastLibusbError = LIBUSB_ERROR_NO_MEM;
             return false;
         }
 
         mReceiveBuffer.resize(kRxSize);
-        libusb_fill_bulk_transfer(transfer, mLibusbDeviceHandle.get(), mEpIn, &mReceiveBuffer[0], mReceiveBuffer.size(), on_libusb_transfer_complete, this, 0);
+        libusb_fill_bulk_transfer(
+            transfer,
+            mLibusbDeviceHandle.get(),
+            mEpIn,
+            &mReceiveBuffer[0],
+            mReceiveBuffer.size(),
+            on_libusb_transfer_complete,
+            this,
+            0
+        );
         int r = libusb_submit_transfer(transfer);
         if (r < 0)
         {
-            libusb_free_transfer(transfer);
+            mLastLibusbError = r;
             return false;
         }
 
@@ -571,14 +652,19 @@ public:
 
                 if (mRxCompleteFn)
                 {
-                    mRxCompleteFn();
+                    mRxCompleteFn(getLastErrorStr());
                 }
             }
         );
 
+        // Release control so it won't be freed
+        transferPtr.release();
+
         return true;
     }
 
+    //! Closes the interface
+    //! @return true if interface was closed or was already closed
     bool closeInterface()
     {
         std::lock_guard<std::mutex> lock(mMutex);
@@ -602,12 +688,43 @@ public:
             int r = libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
             if (r < 0)
             {
+                mLastLibusbError = r;
                 return false;
             }
 
         }
 
         return true;
+    }
+
+    //! @return description of the last experienced error
+    const char* getLastErrorStr()
+    {
+        switch (mLastLibusbError)
+        {
+	        case LIBUSB_SUCCESS: return "";
+        	case LIBUSB_ERROR_IO: return "Input/Output error";
+	        case LIBUSB_ERROR_INVALID_PARAM: return "Invalid parameter (internal fault)";
+	        case LIBUSB_ERROR_ACCESS: return "Access denied (check permissions or udev rules)";
+	        case LIBUSB_ERROR_NO_DEVICE: return "Device not found or disconnected";
+            case LIBUSB_ERROR_NOT_FOUND: return "Device, interface, or endpoint not found";
+            case LIBUSB_ERROR_BUSY: return "Device is busy";
+            case LIBUSB_ERROR_TIMEOUT: return "Timeout occurred";
+            case LIBUSB_ERROR_OVERFLOW: return "Overflow occurred";
+            case LIBUSB_ERROR_PIPE: return "Pipe error";
+            case LIBUSB_ERROR_INTERRUPTED: return "Operation was interrupted";
+            case LIBUSB_ERROR_NO_MEM: return "Insufficient memory";
+            case LIBUSB_ERROR_NOT_SUPPORTED: return "Operation not supported or unimplemented on this platform";
+            case LIBUSB_ERROR_OTHER: // fall through
+            default:
+                return "Undefined error";
+        }
+    }
+
+    //! @return true iff the interface is currently claimed
+    bool isConnected()
+    {
+        return mInterfaceClaimed;
     }
 
 public:
@@ -636,20 +753,24 @@ private:
     std::vector<std::uint8_t> mReceiveBuffer;
     std::vector<std::uint8_t> mCombinedReceiveBuffer;
     std::function<void(uint64_t, uint8_t, const std::vector<std::uint8_t>&)> mRxFn;
-    std::function<void()> mRxCompleteFn;
+    std::function<void(const char*)> mRxCompleteFn;
+    int mLastLibusbError = LIBUSB_SUCCESS;
 };
 
 void LIBUSB_CALL on_libusb_transfer_complete(libusb_transfer *transfer)
 {
     DppDeviceImp* dppDeviceImp = static_cast<DppDeviceImp*>(transfer->user_data);
-    dppDeviceImp->transferComplete(transfer);
+    std::unique_ptr<libusb_transfer, LibusbTransferDeleter> transferPtr(transfer);
+    dppDeviceImp->transferComplete(std::move(transferPtr));
 }
 
 DppDevice::DppDevice(std::unique_ptr<DppDeviceImp>&& dev) : mImp(std::move(dev))
 {}
 
 DppDevice::~DppDevice()
-{}
+{
+    disconnect();
+}
 
 std::unique_ptr<DppDevice> DppDevice::find(const std::string& serial)
 {
@@ -813,7 +934,7 @@ std::string DppDevice::getSerialAt(std::size_t idx)
     {
         return dev->getSerial();
     }
-    return {};
+    return std::string();
 }
 
 const std::string& DppDevice::getSerial() const
@@ -821,8 +942,20 @@ const std::string& DppDevice::getSerial() const
     return mImp->mSerial;
 }
 
-bool DppDevice::connect()
+const char* DppDevice::getLastErrorStr()
 {
+    return mImp->getLastErrorStr();
+}
+
+bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+
+    if (mConnected)
+    {
+        return true;
+    }
+
     if (!mImp->openInterface())
     {
         return false;
@@ -834,19 +967,117 @@ bool DppDevice::connect()
             {
                 handleReceive(addr, cmd, payload);
             },
-            [this](){handleReceiveComplete();}
+            [this, fn](const char* errStr)
+            {
+                disconnect();
+                if (fn)
+                {
+                    fn(errStr);
+                }
+            }
         )
     )
     {
         return false;
     }
 
+    mTimeoutThread = std::make_unique<std::thread>(
+        [this]()
+        {
+            while (true)
+            {
+                std::list<std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>> fns;
+
+                {
+                    std::unique_lock<std::mutex> lock(mMutex);
+
+                    if (mTimeoutLookup.empty())
+                    {
+                        mTimeoutCv.wait(lock, [this](){return !isConnected();});
+                    }
+                    else
+                    {
+                        std::chrono::system_clock::time_point nextTimePoint = mTimeoutLookup.begin()->first;
+                        mTimeoutCv.wait_until(lock, nextTimePoint, [this](){return !isConnected();});
+                    }
+
+                    if (!isConnected())
+                    {
+                        return;
+                    }
+
+                    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+
+
+                    for (auto iter = mTimeoutLookup.begin(); iter != mTimeoutLookup.end();)
+                    {
+                        if (now < iter->first)
+                        {
+                            break;
+                        }
+
+                        FunctionLookupMap::iterator fnLookupIter = mFnLookup.find(iter->second);
+                        if (fnLookupIter != mFnLookup.end())
+                        {
+                            fns.push_back(std::move(fnLookupIter->second.callback));
+                            mFnLookup.erase(fnLookupIter);
+                        }
+
+                        iter = mTimeoutLookup.erase(iter);
+                    }
+                }
+
+                for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : fns)
+                {
+                    fn(kCmdTimeout, {});
+                }
+            }
+        }
+    );
+
+    mConnected = true;
+
     return true;
 }
 
 bool DppDevice::disconnect()
 {
-    return mImp->closeInterface();
+    bool closed = false;
+    std::unique_ptr<std::thread> timeoutThread;
+    std::list<std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>> fns;
+
+    {
+        std::lock_guard<std::mutex> lock(mMutex);
+
+        mConnected = false;
+
+        closed = mImp->closeInterface();
+        if (mTimeoutThread)
+        {
+            mTimeoutCv.notify_all();
+            timeoutThread = std::move(mTimeoutThread);
+        }
+
+        for (FunctionLookupMap::reference entry : mFnLookup)
+        {
+            fns.push_back(std::move(entry.second.callback));
+        }
+
+        mFnLookup.clear();
+        mTimeoutLookup.clear();
+    }
+
+    for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : fns)
+    {
+        fn(kCmdDisconnect, {});
+    }
+
+    if (timeoutThread)
+    {
+        timeoutThread->join();
+    }
+
+    return closed;
 }
 
 void DppDevice::handleReceive(std::uint64_t addr, std::uint8_t cmd, const std::vector<std::uint8_t>& payload)
@@ -854,11 +1085,12 @@ void DppDevice::handleReceive(std::uint64_t addr, std::uint8_t cmd, const std::v
     std::function<void(std::uint8_t cmd, const std::vector<std::uint8_t>& payload)> respFn;
 
     {
-        std::lock_guard<std::mutex> lock(mFnLookupMutex);
+        std::lock_guard<std::mutex> lock(mMutex);
         FunctionLookupMap::iterator iter = mFnLookup.find(addr);
         if (iter != mFnLookup.end())
         {
-            respFn = std::move(iter->second);
+            respFn = std::move(iter->second.callback);
+            mTimeoutLookup.erase(iter->second.timeoutMapIter);
             mFnLookup.erase(iter);
         }
     }
@@ -869,24 +1101,57 @@ void DppDevice::handleReceive(std::uint64_t addr, std::uint8_t cmd, const std::v
     }
 }
 
-void DppDevice::handleReceiveComplete()
-{}
-
-bool DppDevice::send(
+std::uint64_t DppDevice::send(
     std::uint8_t cmd,
     const std::vector<std::uint8_t>& payload,
-    const std::function<void(std::uint8_t cmd, const std::vector<std::uint8_t>& payload)>& respFn
+    const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>& payload)>& respFn,
+    std::uint32_t timeoutMs
 )
 {
     std::uint64_t addr = 0;
 
     {
-        std::lock_guard<std::mutex> lock(mFnLookupMutex);
+        std::lock_guard<std::mutex> lock(mMutex);
+
+        if (mNextAddr < kMinAddr)
+        {
+            mNextAddr = kMinAddr;
+        }
+
         addr = mNextAddr++;
-        mFnLookup[addr] = respFn;
+
+        if (mNextAddr > kMaxAddr)
+        {
+            mNextAddr = kMinAddr;
+        }
+
+        if (respFn)
+        {
+            FunctionLookupMapEntry entry;
+            entry.callback = respFn;
+            entry.timeoutMapIter = mTimeoutLookup.insert(std::make_pair(
+                std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs),
+                addr
+            ));
+
+            mFnLookup[addr] = std::move(entry);
+            mTimeoutCv.notify_all();
+        }
     }
 
-    return mImp->send(addr, cmd, payload);
+    return (mImp->send(addr, cmd, payload)) ? addr : 0;
+}
+
+bool DppDevice::isConnected()
+{
+    return mConnected;
+}
+
+std::size_t DppDevice::getNumWaiting()
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+    // Size of both of these maps should be equal
+    return (std::max)(mFnLookup.size(), mTimeoutLookup.size());
 }
 
 }

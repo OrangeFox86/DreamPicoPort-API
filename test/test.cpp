@@ -30,6 +30,226 @@ void response(std::int16_t cmd, const std::vector<std::uint8_t>& payload)
     mainCv.notify_all();
 }
 
+void response32(std::int16_t cmd, const std::vector<std::uint32_t>& payload)
+{
+    if (cmd < 0)
+    {
+        printf("Response timeout\n");
+    }
+    else
+    {
+        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(cmd));
+        for (std::uint32_t b : payload)
+        {
+            printf("%04x ", b);
+        }
+        printf("\n");
+    }
+
+    std::lock_guard<std::mutex> lock(mainMutex);
+    mainComplete = true;
+    mainCv.notify_all();
+}
+
+void player_reset_response(std::int16_t cmd, std::uint8_t numReset)
+{
+    if (cmd < 0)
+    {
+        printf("Response timeout\n");
+    }
+    else
+    {
+        printf("Response received; cmd: %02hhx, numReset: %hhu\n", static_cast<std::uint8_t>(cmd), numReset);
+    }
+
+    std::lock_guard<std::mutex> lock(mainMutex);
+    mainComplete = true;
+    mainCv.notify_all();
+}
+
+void simple_response(std::int16_t cmd)
+{
+    if (cmd < 0)
+    {
+        printf("Response timeout\n");
+    }
+    else
+    {
+        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(cmd));
+    }
+
+    std::lock_guard<std::mutex> lock(mainMutex);
+    mainComplete = true;
+    mainCv.notify_all();
+}
+
+void summary_response(std::int16_t cmd, const std::list<std::list<std::array<uint32_t, 2>>>& summary)
+{
+    if (cmd < 0)
+    {
+        printf("Response timeout\n");
+    }
+    else
+    {
+        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(cmd));
+        printf("{");
+        bool outerFirst = true;
+        for (const std::list<std::array<uint32_t, 2>>& periph : summary)
+        {
+            if (!outerFirst)
+            {
+                printf(",");
+            }
+
+            printf("\n  {");
+            bool innerFirst = true;
+            for (const std::array<uint32_t, 2>& fns : periph)
+            {
+                if (!innerFirst)
+                {
+                    printf(",");
+                }
+                printf("{%08X, %08X}", fns[0], fns[1]);
+                innerFirst = false;
+            }
+            printf("}");
+            outerFirst = false;
+        }
+        if (!outerFirst)
+        {
+            printf("\n");
+        }
+        printf("}\n");
+    }
+
+    std::lock_guard<std::mutex> lock(mainMutex);
+    mainComplete = true;
+    mainCv.notify_all();
+}
+
+void ver_response(std::int16_t cmd, std::uint8_t verMajor, std::uint8_t verMinor)
+{
+    if (cmd < 0)
+    {
+        printf("Response timeout\n");
+    }
+    else
+    {
+        printf("Response received; cmd: %02hhx, ver:%hhu.%hhu\n", static_cast<std::uint8_t>(cmd), verMajor, verMinor);
+    }
+
+    std::lock_guard<std::mutex> lock(mainMutex);
+    mainComplete = true;
+    mainCv.notify_all();
+}
+
+void controller_state_response(std::int16_t cmd, const dpp_api::ControllerState& controllerState)
+{
+    if (cmd < 0)
+    {
+        printf("Response timeout\n");
+    }
+    else
+    {
+        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(cmd));
+        printf("Left analog: %hhi,%hhi\n", controllerState.x, controllerState.y);
+        printf("Right analog: %hhi,%hhi\n", controllerState.rx, controllerState.ry);
+        printf("Hat: ");
+        switch(controllerState.hat)
+        {
+            case dpp_api::ControllerState::GAMEPAD_HAT_UP:
+                printf("UP\n");
+                break;
+            case dpp_api::ControllerState::GAMEPAD_HAT_UP_RIGHT:
+                printf("UP-RIGHT\n");
+                break;
+            case dpp_api::ControllerState::GAMEPAD_HAT_RIGHT:
+                printf("RIGHT\n");
+                break;
+            case dpp_api::ControllerState::GAMEPAD_HAT_DOWN_RIGHT:
+                printf("DOWN-RIGHT\n");
+                break;
+            case dpp_api::ControllerState::GAMEPAD_HAT_DOWN:
+                printf("DOWN\n");
+                break;
+            case dpp_api::ControllerState::GAMEPAD_HAT_DOWN_LEFT:
+                printf("DOWN-LEFT\n");
+                break;
+            case dpp_api::ControllerState::GAMEPAD_HAT_LEFT:
+                printf("LEFT\n");
+                break;
+            case dpp_api::ControllerState::GAMEPAD_HAT_UP_LEFT:
+                printf("UP-LEFT\n");
+                break;
+            case dpp_api::ControllerState::GAMEPAD_HAT_CENTERED: // fall through
+            default:
+                printf("CENTERED\n");
+                break;
+        }
+        printf(
+            "Buttons: %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_A) ? "A" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_B) ? "B" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_C) ? "C" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_X) ? "X" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_Y) ? "Y" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_Z) ? "Z" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_DPAD_B_R) ? "R" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_DPAD_B_L) ? "L" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_DPAD_B_D) ? "D" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_DPAD_B_U) ? "U" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_D) ? "D" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_BUTTON_START) ? "S" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_VMU1_A) ? "[A]" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_VMU1_B) ? "[B]" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_VMU1_U) ? "[U]" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_VMU1_D) ? "[D]" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_VMU1_L) ? "[L]" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_VMU1_R) ? "[R]" : ""),
+            (controllerState.isPressed(dpp_api::ControllerState::GAMEPAD_CHANGE_DETECT) ? "*" : "")
+        );
+        printf("Pad: %hhu\n", controllerState.pad);
+    }
+
+    std::lock_guard<std::mutex> lock(mainMutex);
+    mainComplete = true;
+    mainCv.notify_all();
+}
+
+void controller_connection_response(std::int16_t cmd, const std::array<dpp_api::GamepadConnectionState, 4>& gamepadConnectionStates)
+{
+    if (cmd < 0)
+    {
+        printf("Response timeout\n");
+    }
+    else
+    {
+        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(cmd));
+        int idx = 0;
+        for (const dpp_api::GamepadConnectionState& state : gamepadConnectionStates)
+        {
+            printf("%c: ", 'A' + idx++);
+            switch (state)
+            {
+                case dpp_api::GamepadConnectionState::NOT_CONNECTED:
+                    printf("NOT CONNECTED\n");
+                    break;
+                case dpp_api::GamepadConnectionState::CONNECTED:
+                    printf("CONNECTED\n");
+                    break;
+                case dpp_api::GamepadConnectionState::UNAVAILABLE: // fall through
+                default:
+                    printf("UNAVAILABLE\n");
+                    break;
+            }
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(mainMutex);
+    mainComplete = true;
+    mainCv.notify_all();
+}
+
 void read_complete(const char* errStr)
 {
     printf("Disconnected: %s\n", errStr);
@@ -46,12 +266,40 @@ int main(int argc, char **argv)
             printf("Failed to connect\n");
             return 1;
         }
-        bool sent = dppDevice->send('0', {0x0C, 0x01, 0x00, 0x32, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x68, 0x00, 0x3F, 0xC0, 0x02, 0x01, 0xFC, 0x01, 0xC0, 0x3C, 0x0C, 0x03, 0xFE, 0x06, 0x00, 0x07, 0x98, 0x07, 0x6F, 0x08, 0x00, 0x71, 0xF0, 0x0E, 0xFF, 0x10, 0x00, 0x0C, 0x60, 0x1F, 0xFF, 0x60, 0x00, 0x02, 0x30, 0x3F, 0x6D, 0xC0, 0x00, 0x01, 0x18, 0x36, 0xFF, 0x83, 0x01, 0xF0, 0x14, 0x7F, 0xFF, 0xBD, 0x06, 0x0E, 0x10, 0x7F, 0x6D, 0xCE, 0x38, 0x07, 0xA0, 0xF6, 0xFF, 0x8B, 0xC8, 0x07, 0xC0, 0xFF, 0xC3, 0x0F, 0x0C, 0x05, 0x40, 0x7F, 0x1F, 0x1F, 0x0E, 0x05, 0x60, 0x7E, 0x67, 0xFD, 0x0B, 0x87, 0x3F, 0xC7, 0x8F, 0xEB, 0x0D, 0xFF, 0xF8, 0xF1, 0x33, 0x55, 0x0A, 0xBF, 0xFF, 0x3D, 0x46, 0xAB, 0x0D, 0x55, 0x63, 0xE1, 0x0F, 0x55, 0x0A, 0xAA, 0xA0, 0x7B, 0x3A, 0xAA, 0x05, 0x55, 0x60, 0x21, 0xE3, 0x56, 0x06, 0xAA, 0xA0, 0x3C, 0x82, 0xAA, 0x05, 0x55, 0x60, 0x27, 0x07, 0x56, 0x02, 0xAA, 0xA0, 0x21, 0x06, 0xAA, 0x03, 0x55, 0x40, 0x20, 0x07, 0x54, 0x01, 0xAA, 0xC0, 0x20, 0x0D, 0xAC, 0x00, 0xD5, 0x40, 0x60, 0x1C, 0xF8, 0x00, 0x6A, 0x80, 0x70, 0x14, 0x10, 0x00, 0x3F, 0x00, 0x50, 0x22, 0x00, 0x00, 0x18, 0x00, 0x48, 0x22, 0x00, 0x00, 0x0E, 0x00, 0x88, 0x41, 0x00, 0x00, 0x00, 0x00, 0x84, 0x41, 0x00, 0x00, 0x00, 0x01, 0x04, 0x80, 0x80, 0x00, 0x00, 0x01, 0x02}, response, 500);
-        if (!sent)
+        // bool sent = dppDevice->sendMaple(
+        //     {
+        //         0x0C010032, 0x00000004, 0x00000000, 0x68003FC0, 0x0201FC01, 0xC03C0C03, 0xFE060007, 0x98076F08, 0x0071F00E, 0xFF10000C,
+        //         0x601FFF60, 0x0002303F, 0x6DC00001, 0x1836FF83, 0x01F0147F, 0xFFBD060E, 0x107F6DCE, 0x3807A0F6, 0xFF8BC807, 0xC0FFC30F,
+        //         0x0C05407F, 0x1F1F0E05, 0x607E67FD, 0x0B873FC7, 0x8FEB0DFF, 0xF8F13355, 0x0ABFFF3D, 0x46AB0D55, 0x63E10F55, 0x0AAAA07B,
+        //         0x3AAA0555, 0x6021E356, 0x06AAA03C, 0x82AA0555, 0x60270756, 0x02AAA021, 0x06AA0355, 0x40200754, 0x01AAC020, 0x0DAC00D5,
+        //         0x40601CF8, 0x006A8070, 0x1410003F, 0x00502200, 0x00180048, 0x2200000E, 0x00884100, 0x00000084, 0x41000000, 0x01048080,
+        //         0x00000102
+        //     },
+        //     response32,
+        //     500
+        // );
+
+        // bool sent = dppDevice->sendPlayerReset(0, player_reset_response, 500);
+
+        // bool sent = dppDevice->sendChangePlayerDisplay(0, 1, simple_response, 500);
+
+        // bool sent = dppDevice->sendGetDcSummary(0, summary_response, 500);
+
+        // bool sent = dppDevice->sendGetInterfaceVersion(ver_response, 500);
+
+        // bool sent = dppDevice->sendGetControllerState(0, controller_state_response, 500);
+
+        // bool sent = dppDevice->sendRefreshGamepad(0, simple_response, 500);
+
+        bool sent = dppDevice->sendGetConnectedGamepads(controller_connection_response, 500);
+
+        if (sent == 0)
         {
             printf("Failed to send\n");
             return 2;
         }
+
+        printf("Sent address: %llu\n", static_cast<long long unsigned>(sent));
 
         {
             std::unique_lock<std::mutex> lock(mainMutex);

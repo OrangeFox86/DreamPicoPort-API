@@ -177,6 +177,15 @@ void LIBUSB_CALL on_libusb_transfer_complete(libusb_transfer *transfer);
 class DppDeviceImp
 {
 public:
+    //! Contains transfer data
+    struct TransferData
+    {
+        //! Pointer to the underlying transfer data
+        std::unique_ptr<libusb_transfer, LibusbTransferDeleter> tranfer;
+        //! Buffer which the transfer points into
+        std::vector<std::uint8_t> buffer;
+    };
+
     //! Constructor
     //! @param[in] serial Serial number of this device
     //! @param[in] desc The device descriptor of this device
@@ -203,10 +212,9 @@ public:
     ~DppDeviceImp()
     {
         closeInterface();
-        if (mReadThread)
-        {
-            mReadThread->join();
-        }
+        mLibusbDeviceHandle.reset();
+        mTransferDataMap.clear();
+        mLibusbContext.reset();
     }
 
     //! Opens the vendor interface of the DreamPicoPort
@@ -467,18 +475,18 @@ public:
         return computeCrc16(0xFFFFU, buffer, bufLen);
     }
 
-    //! Process data from mCombinedReceiveBuffer into packets
+    //! Process data from mReceiveBuffer into packets
     void processPackets()
     {
-        while (mCombinedReceiveBuffer.size() >= kMinPacketSize)
+        while (mReceiveBuffer.size() >= kMinPacketSize)
         {
             std::size_t magicStart = 0;
             std::size_t magicSize = 0;
             std::size_t idx = 0;
             std::size_t magicIdx = 0;
-            while (idx < mCombinedReceiveBuffer.size() && magicSize < kSizeMagic)
+            while (idx < mReceiveBuffer.size() && magicSize < kSizeMagic)
             {
-                if (kMagicSequence[magicIdx] == mCombinedReceiveBuffer[idx])
+                if (kMagicSequence[magicIdx] == mReceiveBuffer[idx])
                 {
                     ++magicSize;
                     ++magicIdx;
@@ -496,25 +504,25 @@ public:
             if (magicStart > 0)
             {
                 // Remove non-magic bytes
-                mCombinedReceiveBuffer.erase(mCombinedReceiveBuffer.begin(), mCombinedReceiveBuffer.begin() + magicStart);
-                if (mCombinedReceiveBuffer.size() < kMinPacketSize)
+                mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + magicStart);
+                if (mReceiveBuffer.size() < kMinPacketSize)
                 {
                     // Not large enough for a full packet
                     return;
                 }
             }
 
-            std::uint16_t size = bytesToUint16(&mCombinedReceiveBuffer[kSizeMagic]);
-            std::uint16_t sizeInv = bytesToUint16(&mCombinedReceiveBuffer[kSizeMagic + 2]);
+            std::uint16_t size = bytesToUint16(&mReceiveBuffer[kSizeMagic]);
+            std::uint16_t sizeInv = bytesToUint16(&mReceiveBuffer[kSizeMagic + 2]);
             if ((size ^ sizeInv) != 0xFFFF || size < (kMinSizeAddress + kSizeCrc))
             {
                 // Invalid size inverse, discard first byte and retry
-                mCombinedReceiveBuffer.erase(mCombinedReceiveBuffer.begin(), mCombinedReceiveBuffer.begin() + 1);
+                mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + 1);
                 continue;
             }
 
             // Check if full payload is available
-            if (mCombinedReceiveBuffer.size() < (kSizeMagic + kSizeSize + size))
+            if (mReceiveBuffer.size() < (kSizeMagic + kSizeSize + size))
             {
                 // Wait for more data
                 return;
@@ -522,14 +530,14 @@ public:
 
             // Check CRC
             std::size_t pktSize = kSizeMagic + kSizeSize + size;
-            const std::uint16_t receivedCrc = bytesToUint16(&mCombinedReceiveBuffer[pktSize - kSizeCrc]);
+            const std::uint16_t receivedCrc = bytesToUint16(&mReceiveBuffer[pktSize - kSizeCrc]);
             const std::uint16_t computedCrc =
-                computeCrc16(&mCombinedReceiveBuffer[kSizeMagic + kSizeSize], size - kSizeCrc);
+                computeCrc16(&mReceiveBuffer[kSizeMagic + kSizeSize], size - kSizeCrc);
 
             if (receivedCrc != computedCrc)
             {
                 // Invalid CRC, discard first byte and retry
-                mCombinedReceiveBuffer.erase(mCombinedReceiveBuffer.begin(), mCombinedReceiveBuffer.begin() + 1);
+                mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + 1);
                 continue;
             }
 
@@ -537,7 +545,7 @@ public:
             std::uint64_t addr = 0;
             std::int8_t addrLen = 0;
             bool lastByteBreak = false;
-            std::size_t maxAddrSize = mCombinedReceiveBuffer.size() - kSizeMagic - kSizeSize - kSizeCrc;
+            std::size_t maxAddrSize = mReceiveBuffer.size() - kSizeMagic - kSizeSize - kSizeCrc;
             if (maxAddrSize > static_cast<std::size_t>(kMaxSizeAddress))
             {
                 maxAddrSize = static_cast<std::size_t>(kMaxSizeAddress);
@@ -548,7 +556,7 @@ public:
                 ++i
             ) {
               const std::uint8_t mask = (i < (kMaxSizeAddress - 1)) ? 0x7f : 0xff;
-              const std::uint8_t thisByte = mCombinedReceiveBuffer[kSizeMagic + kSizeSize + i];
+              const std::uint8_t thisByte = mReceiveBuffer[kSizeMagic + kSizeSize + i];
               addr |= (thisByte & mask) << (7 * i);
               ++addrLen;
               if ((thisByte & 0x80) == 0)
@@ -557,28 +565,28 @@ public:
                 break;
               }
             }
-            if (mCombinedReceiveBuffer.size() <= (kSizeMagic + kSizeSize + addrLen + kSizeCrc))
+            if (mReceiveBuffer.size() <= (kSizeMagic + kSizeSize + addrLen + kSizeCrc))
             {
                 // Missing command byte, discard first byte and retry
-                mCombinedReceiveBuffer.erase(mCombinedReceiveBuffer.begin(), mCombinedReceiveBuffer.begin() + 1);
+                mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + 1);
                 continue;
             }
 
             // Extract command
-            const std::uint8_t cmd = mCombinedReceiveBuffer[kSizeMagic + kSizeSize + addrLen];
+            const std::uint8_t cmd = mReceiveBuffer[kSizeMagic + kSizeSize + addrLen];
 
             // Extract payload
             const std::size_t beginIdx = kSizeMagic + kSizeSize + addrLen + kSizeCommand;
             const std::size_t endIdx = kSizeMagic + kSizeSize + size - kSizeCrc;
             std::vector<std::uint8_t> payload(
-                mCombinedReceiveBuffer.begin() + beginIdx,
-                mCombinedReceiveBuffer.begin() + endIdx
+                mReceiveBuffer.begin() + beginIdx,
+                mReceiveBuffer.begin() + endIdx
             );
 
             // Erase this packet from data
-            mCombinedReceiveBuffer.erase(
-                mCombinedReceiveBuffer.begin(),
-                mCombinedReceiveBuffer.begin() + kSizeMagic + kSizeSize + size
+            mReceiveBuffer.erase(
+                mReceiveBuffer.begin(),
+                mReceiveBuffer.begin() + kSizeMagic + kSizeSize + size
             );
 
             // Process the data
@@ -591,38 +599,153 @@ public:
 
     //! Called when a libusb read transfer completed
     //! @param[in] transfer The transfer that completed
-    void transferComplete(std::unique_ptr<libusb_transfer, LibusbTransferDeleter>&& transfer)
+    void transferComplete(libusb_transfer* transfer)
     {
-        if (mRxFn)
+        if (transfer->status == LIBUSB_TRANSFER_COMPLETED && mRxFn && transfer->actual_length > 0)
         {
-            if (transfer->actual_length < mReceiveBuffer.size())
-            {
-                mReceiveBuffer.resize(transfer->actual_length);
-            }
-
-            mCombinedReceiveBuffer.insert(mCombinedReceiveBuffer.end(), mReceiveBuffer.begin(), mReceiveBuffer.end());
+            mReceiveBuffer.insert(mReceiveBuffer.end(), transfer->buffer, transfer->buffer + transfer->actual_length);
             processPackets();
 
-            mReceiveBuffer.resize(kRxSize);
-            transfer->buffer = &mReceiveBuffer[0];
-            transfer->length = mReceiveBuffer.size();
+            transfer->actual_length = 0;
         }
 
-        if (mInterfaceClaimed)
+        bool allowNewTransfer = false;
+
+        if (mInterfaceClaimed && !mExitRequested)
+        {
+            switch (transfer->status)
+            {
+                case LIBUSB_TRANSFER_COMPLETED:
+                {
+                    allowNewTransfer = true;
+                }
+                break;
+
+                case LIBUSB_TRANSFER_TIMED_OUT:
+                {
+                    // retry
+                    allowNewTransfer = true;
+                }
+                break;
+
+                case LIBUSB_TRANSFER_STALL:
+                {
+                    // TODO: if here, then there is no read currently happening, but there could be write.
+                    //       Is that an issue?
+                    int r = libusb_clear_halt(mLibusbDeviceHandle.get(), mEpIn);
+                    if (r < 0)
+                    {
+                        // Failed to clear the halt
+                        mLastLibusbError = r;
+                        allowNewTransfer = false;
+                    }
+                    else
+                    {
+                        // retry
+                        allowNewTransfer = true;
+                    }
+                }
+                break;
+
+                case LIBUSB_TRANSFER_ERROR: // fall through
+                case LIBUSB_TRANSFER_CANCELLED: // fall through
+                case LIBUSB_TRANSFER_NO_DEVICE: // fall through
+                case LIBUSB_TRANSFER_OVERFLOW: // fall through
+                default:
+                {
+                    // Unrecoverable error
+                    if (mLastLibusbError >= 0)
+                    {
+                        mLastLibusbError = LIBUSB_ERROR_IO;
+                    }
+                    allowNewTransfer = false;
+                }
+                break;
+            }
+        }
+        else
+        {
+            if (mLastLibusbError >= 0)
+            {
+                mLastLibusbError = LIBUSB_ERROR_IO;
+            }
+            allowNewTransfer = false;
+        }
+
+        bool transferSubmitted = false;
+
+        if (allowNewTransfer)
         {
             // Submit new transfer
-            int r = libusb_submit_transfer(transfer.get());
+            int r = libusb_submit_transfer(transfer);
             if (r < 0)
             {
                 // Failure
                 mLastLibusbError = r;
-                closeInterface();
-                return;
+            }
+            else
+            {
+                transferSubmitted = true;
+            }
+        }
+
+        if (!transferSubmitted)
+        {
+            // Remove this transfer
+            {
+                std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
+
+                // Erase the transfer from the map which should automatically free the transfer data
+                mTransferDataMap.erase(transfer);
+
+                // Stop the read thread
+                stopRead();
+            }
+        }
+    }
+
+    bool submitNewTransfer()
+    {
+        std::unique_ptr<TransferData> transferData;
+
+        {
+            libusb_transfer *transfer = libusb_alloc_transfer(0); // 0 for default number of ISO packets
+            if (!transfer)
+            {
+                mLastLibusbError = LIBUSB_ERROR_NO_MEM;
+                return false;
+            }
+            transferData = std::make_unique<TransferData>();
+            transferData->tranfer.reset(transfer);
+        }
+
+        transferData->buffer.resize(kRxSize);
+
+        libusb_fill_bulk_transfer(
+            transferData->tranfer.get(),
+            mLibusbDeviceHandle.get(),
+            mEpIn,
+            &transferData->buffer[0],
+            transferData->buffer.size(),
+            on_libusb_transfer_complete,
+            this,
+            0
+        );
+
+        {
+            std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
+
+            int r = libusb_submit_transfer(transferData->tranfer.get());
+            if (r < 0)
+            {
+                mLastLibusbError = r;
+                return false;
             }
 
-            // Release control so it won't be freed
-            transfer.release();
+            mTransferDataMap.insert(std::make_pair(transferData->tranfer.get(), std::move(transferData)));
         }
+
+        return true;
     }
 
     //! Starts the read thread
@@ -639,39 +762,27 @@ public:
             return false;
         }
 
-        libusb_transfer *transfer = libusb_alloc_transfer(0); // 0 for default number of ISO packets
-        std::unique_ptr<libusb_transfer, LibusbTransferDeleter> transferPtr(transfer);
-        if (!transfer)
+        mExitRequested = false;
+
+        if (!submitNewTransfer())
         {
-            mLastLibusbError = LIBUSB_ERROR_NO_MEM;
             return false;
         }
-
-        mReceiveBuffer.resize(kRxSize);
-        libusb_fill_bulk_transfer(
-            transfer,
-            mLibusbDeviceHandle.get(),
-            mEpIn,
-            &mReceiveBuffer[0],
-            mReceiveBuffer.size(),
-            on_libusb_transfer_complete,
-            this,
-            0
-        );
-        int r = libusb_submit_transfer(transfer);
-        if (r < 0)
+        if (!submitNewTransfer())
         {
-            mLastLibusbError = r;
+            std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
+            mTransferDataMap.clear();
             return false;
         }
 
         mRxFn = rxFn;
         mRxCompleteFn = completeFn;
 
+        std::lock_guard<std::mutex> lock(mReadThreadMutex);
         mReadThread = std::make_unique<std::thread>(
             [this]()
             {
-                while (mInterfaceClaimed)
+                while (mInterfaceClaimed && !mExitRequested)
                 {
                     libusb_handle_events(mLibusbContext.get()); // Process pending events and call callbacks
                 }
@@ -683,44 +794,73 @@ public:
             }
         );
 
-        // Release control so it won't be freed
-        transferPtr.release();
-
         return true;
+    }
+
+    //! Request stop of the read thread
+    void stopRead()
+    {
+        std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
+
+        // Flag the thread to exit
+        mExitRequested = true;
+
+        // Cancel any transfers in progress
+        for (auto& pair : mTransferDataMap)
+        {
+            libusb_cancel_transfer(pair.second->tranfer.get());
+        }
+    }
+
+    //! Wait for the read thread to complete
+    void joinRead()
+    {
+        std::lock_guard<std::mutex> lock(mReadThreadMutex);
+        if (mReadThread)
+        {
+            mReadThread->join();
+            mReadThread.reset();
+        }
     }
 
     //! Closes the interface
     //! @return true if interface was closed or was already closed
     bool closeInterface()
     {
-        std::lock_guard<std::mutex> lock(mMutex);
+        stopRead();
+        joinRead();
 
-        if (mInterfaceClaimed)
+        bool result = true;
+
         {
-            mInterfaceClaimed = false;
+            std::lock_guard<std::mutex> lock(mMutex);
 
-            // Set up control transfer for disconnect message (clears buffers)
-            libusb_control_transfer(
-                mLibusbDeviceHandle.get(),
-                LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_OUT,
-                0x22, // bRequest
-                0x00, // wValue (disconnection)
-                kInterfaceNumber, // wIndex
-                nullptr, // data buffer
-                0,    // wLength
-                1000  // timeout in milliseconds
-            );
-
-            int r = libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
-            if (r < 0)
+            if (mInterfaceClaimed)
             {
-                mLastLibusbError = r;
-                return false;
-            }
+                mInterfaceClaimed = false;
 
+                // Set up control transfer for disconnect message (clears buffers)
+                libusb_control_transfer(
+                    mLibusbDeviceHandle.get(),
+                    LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_OUT,
+                    0x22, // bRequest
+                    0x00, // wValue (disconnection)
+                    kInterfaceNumber, // wIndex
+                    nullptr, // data buffer
+                    0,    // wLength
+                    1000  // timeout in milliseconds
+                );
+
+                int r = libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
+                if (r < 0)
+                {
+                    mLastLibusbError = r;
+                    result = false;
+                }
+            }
         }
 
-        return true;
+        return result;
     }
 
     //! @return description of the last experienced error
@@ -741,9 +881,9 @@ public:
             case LIBUSB_ERROR_INTERRUPTED: return "Operation was interrupted";
             case LIBUSB_ERROR_NO_MEM: return "Insufficient memory";
             case LIBUSB_ERROR_NOT_SUPPORTED: return "Operation not supported or unimplemented on this platform";
-            case LIBUSB_ERROR_OTHER: // fall through
+            case LIBUSB_ERROR_OTHER: return "Undefined error";
             default:
-                return "Undefined error";
+                return libusb_error_name(mLastLibusbError);
         }
     }
 
@@ -751,6 +891,11 @@ public:
     bool isConnected()
     {
         return mInterfaceClaimed;
+    }
+
+    const std::string& getSerial() const
+    {
+        return mSerial;
     }
 
 public:
@@ -772,22 +917,25 @@ private:
     std::unique_ptr<libusb_context, LibusbContextDeleter> mLibusbContext;
     std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> mLibusbDeviceHandle;
     bool mInterfaceClaimed;
+    bool mExitRequested = false;
     std::uint8_t mEpIn;
     std::uint8_t mEpOut;
     std::unique_ptr<std::thread> mReadThread;
+    std::mutex mReadThreadMutex;
     std::mutex mMutex;
     std::vector<std::uint8_t> mReceiveBuffer;
-    std::vector<std::uint8_t> mCombinedReceiveBuffer;
     std::function<void(uint64_t, uint8_t, const std::vector<std::uint8_t>&)> mRxFn;
     std::function<void(const char*)> mRxCompleteFn;
-    int mLastLibusbError = LIBUSB_SUCCESS;
+    int mLastLibusbError = LIBUSB_SUCCESS; // TODO: access to this is not serialized
+    std::unordered_map<libusb_transfer*, std::unique_ptr<TransferData>> mTransferDataMap;
+    std::recursive_mutex mTransferDataMapMutex;
+    libusb_hotplug_callback_handle mLibusbHotplugCallbackHandle;
 };
 
 void LIBUSB_CALL on_libusb_transfer_complete(libusb_transfer *transfer)
 {
     DppDeviceImp* dppDeviceImp = static_cast<DppDeviceImp*>(transfer->user_data);
-    std::unique_ptr<libusb_transfer, LibusbTransferDeleter> transferPtr(transfer);
-    dppDeviceImp->transferComplete(std::move(transferPtr));
+    dppDeviceImp->transferComplete(transfer);
 }
 
 DppDevice::DppDevice(std::unique_ptr<DppDeviceImp>&& dev) : mImp(std::move(dev))
@@ -995,7 +1143,6 @@ bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
             },
             [this, fn](const char* errStr)
             {
-                disconnect();
                 if (fn)
                 {
                     fn(errStr);

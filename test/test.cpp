@@ -5,9 +5,16 @@
 #include <mutex>
 #include <condition_variable>
 
-bool mainComplete = false;
 std::condition_variable mainCv;
 std::mutex mainMutex;
+std::uint32_t respCount = 0;
+
+void update_response_count()
+{
+    std::lock_guard<std::mutex> lock(mainMutex);
+    ++respCount;
+    mainCv.notify_all();
+}
 
 void response(std::int16_t cmd, const std::vector<std::uint8_t>& payload)
 {
@@ -25,9 +32,7 @@ void response(std::int16_t cmd, const std::vector<std::uint8_t>& payload)
         printf("\n");
     }
 
-    std::lock_guard<std::mutex> lock(mainMutex);
-    mainComplete = true;
-    mainCv.notify_all();
+    update_response_count();
 }
 
 void response32(std::int16_t cmd, const std::vector<std::uint32_t>& payload)
@@ -46,9 +51,7 @@ void response32(std::int16_t cmd, const std::vector<std::uint32_t>& payload)
         printf("\n");
     }
 
-    std::lock_guard<std::mutex> lock(mainMutex);
-    mainComplete = true;
-    mainCv.notify_all();
+    update_response_count();
 }
 
 void player_reset_response(std::int16_t cmd, std::uint8_t numReset)
@@ -62,9 +65,7 @@ void player_reset_response(std::int16_t cmd, std::uint8_t numReset)
         printf("Response received; cmd: %02hhx, numReset: %hhu\n", static_cast<std::uint8_t>(cmd), numReset);
     }
 
-    std::lock_guard<std::mutex> lock(mainMutex);
-    mainComplete = true;
-    mainCv.notify_all();
+    update_response_count();
 }
 
 void simple_response(std::int16_t cmd)
@@ -78,9 +79,7 @@ void simple_response(std::int16_t cmd)
         printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(cmd));
     }
 
-    std::lock_guard<std::mutex> lock(mainMutex);
-    mainComplete = true;
-    mainCv.notify_all();
+    update_response_count();
 }
 
 void summary_response(std::int16_t cmd, const std::list<std::list<std::array<uint32_t, 2>>>& summary)
@@ -122,9 +121,7 @@ void summary_response(std::int16_t cmd, const std::list<std::list<std::array<uin
         printf("}\n");
     }
 
-    std::lock_guard<std::mutex> lock(mainMutex);
-    mainComplete = true;
-    mainCv.notify_all();
+    update_response_count();
 }
 
 void ver_response(std::int16_t cmd, std::uint8_t verMajor, std::uint8_t verMinor)
@@ -138,9 +135,7 @@ void ver_response(std::int16_t cmd, std::uint8_t verMajor, std::uint8_t verMinor
         printf("Response received; cmd: %02hhx, ver:%hhu.%hhu\n", static_cast<std::uint8_t>(cmd), verMajor, verMinor);
     }
 
-    std::lock_guard<std::mutex> lock(mainMutex);
-    mainComplete = true;
-    mainCv.notify_all();
+    update_response_count();
 }
 
 void controller_state_response(std::int16_t cmd, const dpp_api::ControllerState& controllerState)
@@ -211,9 +206,7 @@ void controller_state_response(std::int16_t cmd, const dpp_api::ControllerState&
         printf("Pad: %hhu\n", controllerState.pad);
     }
 
-    std::lock_guard<std::mutex> lock(mainMutex);
-    mainComplete = true;
-    mainCv.notify_all();
+    update_response_count();
 }
 
 void controller_connection_response(std::int16_t cmd, const std::array<dpp_api::GamepadConnectionState, 4>& gamepadConnectionStates)
@@ -245,14 +238,13 @@ void controller_connection_response(std::int16_t cmd, const std::array<dpp_api::
         }
     }
 
-    std::lock_guard<std::mutex> lock(mainMutex);
-    mainComplete = true;
-    mainCv.notify_all();
+    update_response_count();
 }
 
 void read_complete(const char* errStr)
 {
     printf("Disconnected: %s\n", errStr);
+    fflush(stdout);
 }
 
 int main(int argc, char **argv)
@@ -263,35 +255,26 @@ int main(int argc, char **argv)
         printf("FOUND!\n");
         if (!dppDevice->connect(read_complete))
         {
-            printf("Failed to connect\n");
+            printf("Failed to connect: %s\n", dppDevice->getLastErrorStr());
             return 1;
         }
-        // bool sent = dppDevice->sendMaple(
-        //     {
-        //         0x0C010032, 0x00000004, 0x00000000, 0x68003FC0, 0x0201FC01, 0xC03C0C03, 0xFE060007, 0x98076F08, 0x0071F00E, 0xFF10000C,
-        //         0x601FFF60, 0x0002303F, 0x6DC00001, 0x1836FF83, 0x01F0147F, 0xFFBD060E, 0x107F6DCE, 0x3807A0F6, 0xFF8BC807, 0xC0FFC30F,
-        //         0x0C05407F, 0x1F1F0E05, 0x607E67FD, 0x0B873FC7, 0x8FEB0DFF, 0xF8F13355, 0x0ABFFF3D, 0x46AB0D55, 0x63E10F55, 0x0AAAA07B,
-        //         0x3AAA0555, 0x6021E356, 0x06AAA03C, 0x82AA0555, 0x60270756, 0x02AAA021, 0x06AA0355, 0x40200754, 0x01AAC020, 0x0DAC00D5,
-        //         0x40601CF8, 0x006A8070, 0x1410003F, 0x00502200, 0x00180048, 0x2200000E, 0x00884100, 0x00000084, 0x41000000, 0x01048080,
-        //         0x00000102
-        //     },
-        //     response32,
-        //     500
-        // );
 
-        // bool sent = dppDevice->sendPlayerReset(0, player_reset_response, 500);
+        std::uint32_t numExpected = 0;
 
-        // bool sent = dppDevice->sendChangePlayerDisplay(0, 1, simple_response, 500);
+        std::uint64_t sent = 0;
 
-        // bool sent = dppDevice->sendGetDcSummary(0, summary_response, 500);
-
-        // bool sent = dppDevice->sendGetInterfaceVersion(ver_response, 500);
-
-        // bool sent = dppDevice->sendGetControllerState(0, controller_state_response, 500);
-
-        // bool sent = dppDevice->sendRefreshGamepad(0, simple_response, 500);
-
-        bool sent = dppDevice->sendGetConnectedGamepads(controller_connection_response, 500);
+        sent = dppDevice->sendMaple(
+            {
+                0x0C010032, 0x00000004, 0x00000000, 0x68003FC0, 0x0201FC01, 0xC03C0C03, 0xFE060007, 0x98076F08, 0x0071F00E, 0xFF10000C,
+                0x601FFF60, 0x0002303F, 0x6DC00001, 0x1836FF83, 0x01F0147F, 0xFFBD060E, 0x107F6DCE, 0x3807A0F6, 0xFF8BC807, 0xC0FFC30F,
+                0x0C05407F, 0x1F1F0E05, 0x607E67FD, 0x0B873FC7, 0x8FEB0DFF, 0xF8F13355, 0x0ABFFF3D, 0x46AB0D55, 0x63E10F55, 0x0AAAA07B,
+                0x3AAA0555, 0x6021E356, 0x06AAA03C, 0x82AA0555, 0x60270756, 0x02AAA021, 0x06AA0355, 0x40200754, 0x01AAC020, 0x0DAC00D5,
+                0x40601CF8, 0x006A8070, 0x1410003F, 0x00502200, 0x00180048, 0x2200000E, 0x00884100, 0x00000084, 0x41000000, 0x01048080,
+                0x00000102
+            },
+            response32,
+            500
+        );
 
         if (sent == 0)
         {
@@ -299,13 +282,50 @@ int main(int argc, char **argv)
             return 2;
         }
 
+        ++numExpected;
+        printf("Sent address: %llu\n", static_cast<long long unsigned>(sent));
+
+        // sent = dppDevice->sendPlayerReset(0, player_reset_response, 500);
+
+        // sent = dppDevice->sendChangePlayerDisplay(0, 1, simple_response, 500);
+
+        // sent = dppDevice->sendGetDcSummary(0, summary_response, 500);
+
+        // sent = dppDevice->sendGetInterfaceVersion(ver_response, 500);
+
+        // sent = dppDevice->sendGetControllerState(0, controller_state_response, 500);
+
+        // sent = dppDevice->sendRefreshGamepad(0, simple_response, 500);
+
+        sent = dppDevice->sendGetConnectedGamepads(controller_connection_response, 500);
+
+        if (sent == 0)
+        {
+            printf("Failed to send\n");
+            return 2;
+        }
+
+        ++numExpected;
+        printf("Sent address: %llu\n", static_cast<long long unsigned>(sent));
+
+        sent = dppDevice->sendGetConnectedGamepads(controller_connection_response, 500);
+
+        if (sent == 0)
+        {
+            printf("Failed to send\n");
+            return 2;
+        }
+
+        ++numExpected;
         printf("Sent address: %llu\n", static_cast<long long unsigned>(sent));
 
         {
             std::unique_lock<std::mutex> lock(mainMutex);
-            bool* b = &mainComplete;
-            mainCv.wait_for(lock, std::chrono::milliseconds(1000), [b](){return *b;});
+            std::uint32_t* c = &respCount;
+            mainCv.wait_for(lock, std::chrono::milliseconds(1000), [c, numExpected](){return *c >= numExpected;});
         }
+
+        // std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 
         printf("Num waiting: %i\n", static_cast<int>(dppDevice->getNumWaiting()));
     }

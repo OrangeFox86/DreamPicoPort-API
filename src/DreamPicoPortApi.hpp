@@ -327,8 +327,8 @@ private:
     std::multimap<std::chrono::system_clock::time_point, std::uint64_t> mTimeoutLookup;
     //! The minimum value for mNextAddr
     static const std::uint64_t kMinAddr = 1;
-    //! The maximum value for mNextAddr (essentially, 4 byte max for address length)
-    static const std::uint64_t kMaxAddr = 0xFFFFFFF;
+    //! The maximum value for mNextAddr (essentially, 4 byte max for address length at 7 bits of data per byte)
+    static const std::uint64_t kMaxAddr = 0x0FFFFFFF;
     //! Next available return address
     std::uint64_t mNextAddr = kMinAddr;
     //! Thread which executes response timeouts

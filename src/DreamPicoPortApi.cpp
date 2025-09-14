@@ -13,6 +13,10 @@
 namespace dpp_api
 {
 
+//
+// libusb deleters
+//
+
 //! Deleter for unique_pointer of a libusb_context
 struct LibusbContextDeleter
 {
@@ -57,6 +61,10 @@ struct LibusbTransferDeleter
         libusb_free_transfer(transfer);
     }
 };
+
+//
+// C++ libusb wrappers
+//
 
 //! Holds libusb device list
 class LibusbDeviceList
@@ -170,10 +178,105 @@ static std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> make_lib
     return deviceHandle;
 }
 
-//! Forward declaration of transfer complete callback
-//! @param[in] transfer The transfer which completed
-void LIBUSB_CALL on_libusb_transfer_complete(libusb_transfer *transfer);
+//! Holds libusb error and where it occurred locally
+class LibusbError
+{
+public:
+    LibusbError() = default;
+    LibusbError(const LibusbError&) = default;
+    LibusbError(LibusbError&&) = default;
 
+    //! Save the error data
+    //! @param[in] libusbError The libusb error number
+    //! @param[in] where Where the error ocurred
+    void saveError(int libusbError, const char* where)
+    {
+        std::lock_guard<std::mutex> lock(mMutex);
+        mLastLibusbError = libusbError;
+        mWhere = where;
+    }
+
+    //! Save error only if no error is already set
+    //! @param[in] libusbError The libusb error number
+    //! @param[in] where Where the error ocurred
+    void saveErrorIfNotSet(int libusbError, const char* where)
+    {
+        std::lock_guard<std::mutex> lock(mMutex);
+        if (mLastLibusbError != LIBUSB_SUCCESS)
+        {
+            mLastLibusbError = libusbError;
+            mWhere = where;
+        }
+    }
+
+    //! Clear all error data
+    void clearError()
+    {
+        std::lock_guard<std::mutex> lock(mMutex);
+        mLastLibusbError = LIBUSB_SUCCESS;
+        mWhere = nullptr;
+    }
+
+    //! @return error description
+    std::string getErrorDesc() const
+    {
+        int libusbError = 0;
+        const char* where = nullptr;
+
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            libusbError = mLastLibusbError;
+            where = mWhere;
+        }
+
+        const char* libusbErrorStr = getLibusbErrorStr(libusbError);
+
+        if (where && *where != '\0')
+        {
+            return std::string(libusbErrorStr) + std::string(" @ ") + where;
+        }
+
+        return std::string(libusbErrorStr);
+    }
+
+    //! @return description of the last experienced error
+    static const char* getLibusbErrorStr(int libusbError)
+    {
+        switch (libusbError)
+        {
+            case LIBUSB_SUCCESS: return "";
+            case LIBUSB_ERROR_IO: return "Input/Output error";
+            case LIBUSB_ERROR_INVALID_PARAM: return "Invalid parameter (internal fault)";
+#ifdef __linux__
+            case LIBUSB_ERROR_ACCESS: return "Access denied (check permissions or udev rules)";
+#else
+            case LIBUSB_ERROR_ACCESS: return "Access denied";
+#endif
+            case LIBUSB_ERROR_NO_DEVICE: return "Device not found or disconnected";
+            case LIBUSB_ERROR_NOT_FOUND: return "Device, interface, or endpoint not found";
+            case LIBUSB_ERROR_BUSY: return "Device is busy";
+            case LIBUSB_ERROR_TIMEOUT: return "Timeout occurred";
+            case LIBUSB_ERROR_OVERFLOW: return "Overflow occurred";
+            case LIBUSB_ERROR_PIPE: return "Pipe error";
+            case LIBUSB_ERROR_INTERRUPTED: return "Operation was interrupted";
+            case LIBUSB_ERROR_NO_MEM: return "Insufficient memory";
+            case LIBUSB_ERROR_NOT_SUPPORTED: return "Operation not supported or unimplemented on this platform";
+            case LIBUSB_ERROR_OTHER: return "Undefined error";
+            default:
+                return libusb_error_name(libusbError);
+        }
+    }
+
+private:
+    //! libusb error number
+    int mLastLibusbError = LIBUSB_SUCCESS;
+    //! Holds a static string where the error ocurred
+    const char* mWhere = nullptr;
+    //! Mutex which serializes access to above data
+    mutable std::mutex mMutex;
+};
+
+//! Implementation class for DppDevice
 class DppDeviceImp
 {
 public:
@@ -233,7 +336,7 @@ public:
             int r = libusb_get_active_config_descriptor(libusb_get_device(mLibusbDeviceHandle.get()), &config);
             if (r < 0)
             {
-                mLastLibusbError = r;
+                mLastLibusbError.saveError(r, "libusb_get_active_config_descriptor");
                 return false;
             }
             configDescriptor.reset(config);
@@ -252,7 +355,7 @@ public:
 
         if (!selectedInterface || selectedInterface->num_altsetting <= 0)
         {
-            mLastLibusbError = LIBUSB_ERROR_NOT_FOUND;
+            mLastLibusbError.saveError(LIBUSB_ERROR_NOT_FOUND, "find vendor interface");
             return false;
         }
 
@@ -278,7 +381,7 @@ public:
 
         if (outEndpoint < 0 || inEndpoint < 0)
         {
-            mLastLibusbError = LIBUSB_ERROR_NOT_FOUND;
+            mLastLibusbError.saveError(LIBUSB_ERROR_NOT_FOUND, "find endpoints");
             return false;
         }
 
@@ -290,7 +393,7 @@ public:
         if (r < 0)
         {
             // Handle error - interface claim failed
-            mLastLibusbError = r;
+            mLastLibusbError.saveError(r, "libusb_claim_interface");
             return false;
         }
 
@@ -310,7 +413,7 @@ public:
         {
             // Handle control transfer error
             libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
-            mLastLibusbError = r;
+            mLastLibusbError.saveError(r, "libusb_control_transfer on connect");
             return false;
         }
 
@@ -377,7 +480,7 @@ public:
 
         if (r < 0)
         {
-            mLastLibusbError = r;
+            mLastLibusbError.saveError(r, "libusb_bulk_transfer on send");
             return false;
         }
         else if (transferred != static_cast<int>(data.size()))
@@ -594,6 +697,14 @@ public:
         }
     }
 
+    //! Forward declaration of transfer complete callback
+    //! @param[in] transfer The transfer which completed
+    static void LIBUSB_CALL onLibusbTransferComplete(libusb_transfer *transfer)
+    {
+        DppDeviceImp* dppDeviceImp = static_cast<DppDeviceImp*>(transfer->user_data);
+        dppDeviceImp->transferComplete(transfer);
+    }
+
     //! Called when a libusb read transfer completed
     //! @param[in] transfer The transfer that completed
     void transferComplete(libusb_transfer* transfer)
@@ -627,34 +738,45 @@ public:
 
                 case LIBUSB_TRANSFER_STALL:
                 {
-                    // TODO: if here, then there is no read currently happening, but there could be write.
-                    //       Is that an issue?
-                    int r = libusb_clear_halt(mLibusbDeviceHandle.get(), mEpIn);
-                    if (r < 0)
-                    {
-                        // Failed to clear the halt
-                        mLastLibusbError = r;
-                        allowNewTransfer = false;
-                    }
-                    else
-                    {
-                        // retry
-                        allowNewTransfer = true;
-                    }
+                    // This occurrs if device is physically disconnected. A STALL should not ocurr within normal
+                    // operation. If it does, the application may try to reconnect.
+
+                    mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - stall");
+                    allowNewTransfer = false;
                 }
                 break;
 
-                case LIBUSB_TRANSFER_ERROR: // fall through
-                case LIBUSB_TRANSFER_CANCELLED: // fall through
-                case LIBUSB_TRANSFER_NO_DEVICE: // fall through
-                case LIBUSB_TRANSFER_OVERFLOW: // fall through
+                case LIBUSB_TRANSFER_ERROR:
+                {
+                    mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - error");
+                    allowNewTransfer = false;
+                }
+                break;
+
+                case LIBUSB_TRANSFER_CANCELLED:
+                {
+                    mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - cancelled");
+                    allowNewTransfer = false;
+                }
+                break;
+
+                case LIBUSB_TRANSFER_NO_DEVICE:
+                {
+                    mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - couldn't find device");
+                    allowNewTransfer = false;
+                }
+                break;
+
+                case LIBUSB_TRANSFER_OVERFLOW:
+                {
+                    mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - overflow");
+                    allowNewTransfer = false;
+                }
+                break;
+
                 default:
                 {
-                    // Unrecoverable error
-                    if (mLastLibusbError >= 0)
-                    {
-                        mLastLibusbError = LIBUSB_ERROR_IO;
-                    }
+                    mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - unknown error");
                     allowNewTransfer = false;
                 }
                 break;
@@ -662,10 +784,7 @@ public:
         }
         else
         {
-            if (mLastLibusbError >= 0)
-            {
-                mLastLibusbError = LIBUSB_ERROR_IO;
-            }
+            mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - device closing");
             allowNewTransfer = false;
         }
 
@@ -678,7 +797,7 @@ public:
             if (r < 0)
             {
                 // Failure
-                mLastLibusbError = r;
+                mLastLibusbError.saveError(r, "libusb_submit_transfer on transfer");
             }
             else
             {
@@ -688,16 +807,13 @@ public:
 
         if (!transferSubmitted)
         {
-            // Remove this transfer
-            {
-                std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
+            std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
 
-                // Erase the transfer from the map which should automatically free the transfer data
-                mTransferDataMap.erase(transfer);
+            // Erase the transfer from the map which should automatically free the transfer data
+            mTransferDataMap.erase(transfer);
 
-                // Stop the read thread
-                stopRead();
-            }
+            // Cancel all other transfers
+            stopRead();
         }
     }
 
@@ -712,10 +828,10 @@ public:
             std::unique_ptr<TransferData> transferData;
 
             {
-                libusb_transfer *transfer = libusb_alloc_transfer(0); // 0 for default number of ISO packets
+                libusb_transfer *transfer = libusb_alloc_transfer(0);
                 if (!transfer)
                 {
-                    mLastLibusbError = LIBUSB_ERROR_NO_MEM;
+                    mLastLibusbError.saveError(LIBUSB_ERROR_NO_MEM, "libusb_alloc_transfer");
                     success = false;
                     break;
                 }
@@ -731,7 +847,7 @@ public:
                 mEpIn,
                 &transferData->buffer[0],
                 transferData->buffer.size(),
-                on_libusb_transfer_complete,
+                DppDeviceImp::onLibusbTransferComplete,
                 this,
                 0
             );
@@ -742,7 +858,7 @@ public:
                 int r = libusb_submit_transfer(transferData->tranfer.get());
                 if (r < 0)
                 {
-                    mLastLibusbError = r;
+                    mLastLibusbError.saveError(r, "libusb_submit_transfer");
                     success = false;
                     break;
                 }
@@ -766,7 +882,7 @@ public:
     //! @return true if interface was open or opened and read thread was started
     bool beginRead(
         const std::function<void(uint64_t, uint8_t, const std::vector<std::uint8_t>&)>& rxFn,
-        const std::function<void(const char*)>& completeFn
+        const std::function<void(const std::string&)>& completeFn
     )
     {
         if (!openInterface())
@@ -866,7 +982,7 @@ public:
             int r = libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
             if (r < 0)
             {
-                mLastLibusbError = r;
+                mLastLibusbError.saveError(r, "libusb_release_interface");
                 result = false;
             }
         }
@@ -875,31 +991,9 @@ public:
     }
 
     //! @return description of the last experienced error
-    const char* getLastErrorStr()
+    std::string getLastErrorStr() const
     {
-        switch (mLastLibusbError)
-        {
-	        case LIBUSB_SUCCESS: return "";
-        	case LIBUSB_ERROR_IO: return "Input/Output error";
-	        case LIBUSB_ERROR_INVALID_PARAM: return "Invalid parameter (internal fault)";
-#ifdef __linux__
-	        case LIBUSB_ERROR_ACCESS: return "Access denied (check permissions or udev rules)";
-#else
-	        case LIBUSB_ERROR_ACCESS: return "Access denied";
-#endif
-	        case LIBUSB_ERROR_NO_DEVICE: return "Device not found or disconnected";
-            case LIBUSB_ERROR_NOT_FOUND: return "Device, interface, or endpoint not found";
-            case LIBUSB_ERROR_BUSY: return "Device is busy";
-            case LIBUSB_ERROR_TIMEOUT: return "Timeout occurred";
-            case LIBUSB_ERROR_OVERFLOW: return "Overflow occurred";
-            case LIBUSB_ERROR_PIPE: return "Pipe error";
-            case LIBUSB_ERROR_INTERRUPTED: return "Operation was interrupted";
-            case LIBUSB_ERROR_NO_MEM: return "Insufficient memory";
-            case LIBUSB_ERROR_NOT_SUPPORTED: return "Operation not supported or unimplemented on this platform";
-            case LIBUSB_ERROR_OTHER: return "Undefined error";
-            default:
-                return libusb_error_name(mLastLibusbError);
-        }
+        return mLastLibusbError.getErrorDesc();
     }
 
     //! @return true iff the interface is currently claimed
@@ -934,15 +1028,17 @@ public:
 
 private:
     //! The size in bytes of each libusb transfer
-    static const std::size_t kRxSize = 2048;
+    static const std::size_t kRxSize = 1100;
     //! The number of libusb transfers to create
-    static const std::uint32_t kNumTransfers = 2;
+    static const std::uint32_t kNumTransfers = 5;
     //! The device descriptor of this device
     libusb_device_descriptor mDesc;
     //! Pointer to the libusb context
     std::unique_ptr<libusb_context, LibusbContextDeleter> mLibusbContext;
     //! Maps transfer pointers to TransferData
     std::unordered_map<libusb_transfer*, std::unique_ptr<TransferData>> mTransferDataMap;
+    //! Serializes access to mTransferDataMap
+    std::recursive_mutex mTransferDataMapMutex;
     //! Pointer to the libusb device handle
     std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> mLibusbDeviceHandle;
     //! True when interface is claimed
@@ -962,18 +1058,15 @@ private:
     //! The function to call whenever a packet is received
     std::function<void(uint64_t, uint8_t, const std::vector<std::uint8_t>&)> mRxFn;
     //! The function to call when the read thread exits
-    std::function<void(const char*)> mRxCompleteFn;
+    std::function<void(const std::string&)> mRxCompleteFn;
+    //! Contains last libusb error data
+    LibusbError mLastLibusbError;
 
-    int mLastLibusbError = LIBUSB_SUCCESS;
-    std::recursive_mutex mTransferDataMapMutex;
-    libusb_hotplug_callback_handle mLibusbHotplugCallbackHandle;
-};
+}; // class DppDeviceImp
 
-void LIBUSB_CALL on_libusb_transfer_complete(libusb_transfer *transfer)
-{
-    DppDeviceImp* dppDeviceImp = static_cast<DppDeviceImp*>(transfer->user_data);
-    dppDeviceImp->transferComplete(transfer);
-}
+//
+// DppDevice definitions
+//
 
 DppDevice::DppDevice(std::unique_ptr<DppDeviceImp>&& dev) : mImp(std::move(dev))
 {}
@@ -1153,19 +1246,14 @@ const std::string& DppDevice::getSerial() const
     return mImp->mSerial;
 }
 
-const char* DppDevice::getLastErrorStr()
+std::string DppDevice::getLastErrorStr()
 {
     return mImp->getLastErrorStr();
 }
 
-bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
+bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn)
 {
-    if (mConnected)
-    {
-        return true;
-    }
-
-    // To satisfy an edge case, ensure complete disconnection an join before trying to reconnect
+    // To satisfy an edge case, ensure complete disconnection and join before trying to reconnect
     disconnect();
 
     std::lock_guard<std::recursive_mutex> lock(mMutex);
@@ -1181,7 +1269,7 @@ bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
             {
                 handleReceive(addr, cmd, payload);
             },
-            [this, fn](const char* errStr)
+            [this, fn](const std::string& errStr)
             {
                 disconnect();
                 if (fn)
@@ -1747,4 +1835,4 @@ std::size_t DppDevice::getNumWaiting()
     return (std::max)(mFnLookup.size(), mTimeoutLookup.size());
 }
 
-}
+} // namespace dpp_api

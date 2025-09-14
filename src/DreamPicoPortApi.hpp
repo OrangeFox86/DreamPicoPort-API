@@ -121,14 +121,14 @@ public:
     const std::string& getSerial() const;
 
     //! @return string representation of last error
-    const char* getLastErrorStr();
+    std::string getLastErrorStr();
 
-    //! Connect to the device and start operation threads
+    //! Connect to the device and start operation threads. If already connected, disconnect before reconnecting.
     //! @note connection may fail with "Access denied" if attempt is made to connect immediately after disconnect
     //! @param[in] fn When true is returned, this is the function to execute when receive completes
     //! @return false on failure and getLastErrorStr() will return error description
     //! @return true if connection succeeded
-    bool connect(const std::function<void(const char* errStr)>& fn = nullptr);
+    bool connect(const std::function<void(const std::string& errStr)>& fn = nullptr);
 
     //! Disconnect from the previously connected device and stop all threads
     //! @return false on failure and getLastErrorStr() will return error description

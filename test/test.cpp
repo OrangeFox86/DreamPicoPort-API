@@ -241,9 +241,9 @@ void controller_connection_response(std::int16_t cmd, const std::array<dpp_api::
     update_response_count();
 }
 
-void read_complete(const char* errStr)
+void read_complete(const std::string& errStr)
 {
-    printf("Disconnected: %s\n", errStr);
+    printf("Disconnected%s%s\n", (errStr.empty() ? "" : ": "), errStr.c_str());
     fflush(stdout);
 }
 
@@ -255,7 +255,7 @@ int main(int argc, char **argv)
         printf("FOUND!\n");
         if (!dppDevice->connect(read_complete))
         {
-            printf("Failed to connect: %s\n", dppDevice->getLastErrorStr());
+            printf("Failed to connect: %s\n", dppDevice->getLastErrorStr().c_str());
             return 1;
         }
 
@@ -265,12 +265,13 @@ int main(int argc, char **argv)
 
         sent = dppDevice->sendMaple(
             {
-                0x0C010032, 0x00000004, 0x00000000, 0x68003FC0, 0x0201FC01, 0xC03C0C03, 0xFE060007, 0x98076F08, 0x0071F00E, 0xFF10000C,
-                0x601FFF60, 0x0002303F, 0x6DC00001, 0x1836FF83, 0x01F0147F, 0xFFBD060E, 0x107F6DCE, 0x3807A0F6, 0xFF8BC807, 0xC0FFC30F,
-                0x0C05407F, 0x1F1F0E05, 0x607E67FD, 0x0B873FC7, 0x8FEB0DFF, 0xF8F13355, 0x0ABFFF3D, 0x46AB0D55, 0x63E10F55, 0x0AAAA07B,
-                0x3AAA0555, 0x6021E356, 0x06AAA03C, 0x82AA0555, 0x60270756, 0x02AAA021, 0x06AA0355, 0x40200754, 0x01AAC020, 0x0DAC00D5,
-                0x40601CF8, 0x006A8070, 0x1410003F, 0x00502200, 0x00180048, 0x2200000E, 0x00884100, 0x00000084, 0x41000000, 0x01048080,
-                0x00000102
+                0x0C010032, 0x00000004, 0x00000000,
+                0x68003FC0, 0x0201FC01, 0xC03C0C03, 0xFE060007, 0x98076F08, 0x0071F00E, 0xFF10000C, 0x601FFF60,
+                0x0002303F, 0x6DC00001, 0x1836FF83, 0x01F0147F, 0xFFBD060E, 0x107F6DCE, 0x3807A0F6, 0xFF8BC807,
+                0xC0FFC30F, 0x0C05407F, 0x1F1F0E05, 0x607E67FD, 0x0B873FC7, 0x8FEB0DFF, 0xF8F13355, 0x0ABFFF3D,
+                0x46AB0D55, 0x63E10F55, 0x0AAAA07B, 0x3AAA0555, 0x6021E356, 0x06AAA03C, 0x82AA0555, 0x60270756,
+                0x02AAA021, 0x06AA0355, 0x40200754, 0x01AAC020, 0x0DAC00D5, 0x40601CF8, 0x006A8070, 0x1410003F,
+                0x00502200, 0x00180048, 0x2200000E, 0x00884100, 0x00000084, 0x41000000, 0x01048080, 0x00000102
             },
             response32,
             500

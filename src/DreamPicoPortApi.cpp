@@ -276,6 +276,60 @@ private:
     mutable std::mutex mMutex;
 };
 
+static std::pair<
+    std::unique_ptr<libusb_device_descriptor>,
+    std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter>
+> find_dpp_device(
+    const std::unique_ptr<libusb_context, LibusbContextDeleter>& libusbContext,
+    const std::string& serial
+)
+{
+    LibusbDeviceList deviceList(libusbContext);
+    std::unique_ptr<libusb_device_descriptor> desc = std::make_unique<libusb_device_descriptor>();
+
+    for (libusb_device* dev : deviceList)
+    {
+        int r = libusb_get_device_descriptor(dev, desc.get());
+        if (r < 0)
+        {
+            continue;
+        }
+
+        if (desc->idVendor != 0x1209 || desc->idProduct != 0x2F07)
+        {
+            continue;
+        }
+
+        std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> deviceHandle = make_libusb_device_handle(dev);
+        if (!deviceHandle)
+        {
+            continue;
+        }
+
+        unsigned char serial_string[256];
+        if (desc->iSerialNumber > 0)
+        {
+            r = libusb_get_string_descriptor_ascii(
+                deviceHandle.get(),
+                desc->iSerialNumber,
+                serial_string,
+                sizeof(serial_string)
+            );
+
+            if (r > 0)
+            {
+                std::string device_serial(reinterpret_cast<char*>(serial_string));
+                if (device_serial == serial)
+                {
+                    return std::make_pair(std::move(desc), std::move(deviceHandle));
+                }
+            }
+        }
+    }
+
+    return std::make_pair(nullptr, nullptr);
+}
+
 //! Implementation class for DppDevice
 class DppDeviceImp
 {
@@ -296,12 +350,12 @@ public:
     //! @param[in] libusbDeviceHandle Handle to the device
     DppDeviceImp(
         const std::string& serial,
-        const libusb_device_descriptor& desc,
+        std::unique_ptr<libusb_device_descriptor>&& desc,
         std::unique_ptr<libusb_context, LibusbContextDeleter>&& libusbContext,
         std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter>&& libusbDeviceHandle
     ) :
         mSerial(serial),
-        mDesc(desc),
+        mDesc(std::move(desc)),
         mLibusbContext(std::move(libusbContext)),
         mLibusbDeviceHandle(std::move(libusbDeviceHandle))
     {
@@ -312,6 +366,7 @@ public:
     {
         closeInterface();
         joinRead();
+        reset();
 
         // Reset libusb pointers in the correct order
         mLibusbDeviceHandle.reset();
@@ -327,6 +382,24 @@ public:
         {
             return true;
         }
+
+        if (mPreviouslyConnected || !mLibusbDeviceHandle)
+        {
+            // Reset and attempt to reconnect
+            reset();
+
+            auto foundDevice = find_dpp_device(mLibusbContext, mSerial);
+            if (!foundDevice.first || !foundDevice.second)
+            {
+                mLastLibusbError.saveError(LIBUSB_ERROR_NO_DEVICE, "find_dpp_device");
+                return false;
+            }
+
+            mDesc = std::move(foundDevice.first);
+            mLibusbDeviceHandle = std::move(foundDevice.second);
+        }
+
+        mPreviouslyConnected = true;
 
         // Dynamically retrieve endpoint addresses for the interface
         std::unique_ptr<libusb_config_descriptor, LibusbConfigDescriptorDeleter> configDescriptor;
@@ -428,7 +501,7 @@ public:
     //! @return true if data was successfully sent
     bool send(std::uint64_t addr, std::uint8_t cmd, const std::vector<std::uint8_t>& payload)
     {
-        if (!openInterface())
+        if (!openInterface() || !mLibusbDeviceHandle)
         {
             return false;
         }
@@ -920,6 +993,13 @@ public:
                 {
                     if (mRxStalled && mTransferDataMap.empty())
                     {
+                        if (!mLibusbDeviceHandle)
+                        {
+                            mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "Device handle freed");
+                            mExitRequested = true;
+                            break;
+                        }
+
                         int r = libusb_clear_halt(mLibusbDeviceHandle.get(), mEpIn);
                         if (r < 0)
                         {
@@ -1003,34 +1083,62 @@ public:
     bool closeInterface()
     {
         stopRead();
-
         bool result = true;
 
         if (mInterfaceClaimed)
         {
             mInterfaceClaimed = false;
 
-            // Set up control transfer for disconnect message (clears buffers)
-            libusb_control_transfer(
-                mLibusbDeviceHandle.get(),
-                LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_OUT,
-                0x22, // bRequest
-                0x00, // wValue (disconnection)
-                kInterfaceNumber, // wIndex
-                nullptr, // data buffer
-                0,    // wLength
-                1000  // timeout in milliseconds
-            );
-
-            int r = libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
-            if (r < 0)
+            if (mLibusbDeviceHandle)
             {
-                mLastLibusbError.saveError(r, "libusb_release_interface");
-                result = false;
+                // Set up control transfer for disconnect message (clears buffers)
+                libusb_control_transfer(
+                    mLibusbDeviceHandle.get(),
+                    LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_OUT,
+                    0x22, // bRequest
+                    0x00, // wValue (disconnection)
+                    kInterfaceNumber, // wIndex
+                    nullptr, // data buffer
+                    0,    // wLength
+                    1000  // timeout in milliseconds
+                );
+
+                int r = libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
+                if (r < 0)
+                {
+                    mLastLibusbError.saveError(r, "libusb_release_interface");
+                    result = false;
+                }
+
             }
+
+
         }
 
         return result;
+    }
+
+    //! Attempts to reset the device
+    //! @return true if device has been reset
+    bool reset()
+    {
+        if (mLibusbDeviceHandle)
+        {
+            // TODO: This is probematic on Windows - test in Linux
+            // Attempt to reset the device
+            // int r = libusb_reset_device(mLibusbDeviceHandle.get());
+
+            // Delete the handle since it is no longer valid
+            mLibusbDeviceHandle.reset();
+
+            // if (r < 0)
+            // {
+            //     mLastLibusbError.saveError(r, "libusb_reset_device");
+            //     return false;
+            // }
+        }
+
+        return true;
     }
 
     //! @return description of the last experienced error
@@ -1043,6 +1151,17 @@ public:
     bool isConnected()
     {
         return mInterfaceClaimed;
+    }
+
+    //! @return USB version number {major, minor, patch}
+    std::array<std::uint8_t, 3> getVersion() const
+    {
+        std::array<std::uint8_t, 3> version;
+        std::uint16_t bcdVer = mDesc->bcdDevice;
+        version[0] = (bcdVer >> 8) & 0xFF;
+        version[1] = (bcdVer >> 4) & 0x0F;
+        version[2] = (bcdVer) & 0x0F;
+        return version;
     }
 
 public:
@@ -1075,7 +1194,7 @@ private:
     //! The number of libusb transfers to create
     static const std::uint32_t kNumTransfers = 5;
     //! The device descriptor of this device
-    libusb_device_descriptor mDesc;
+    std::unique_ptr<libusb_device_descriptor> mDesc;
     //! Pointer to the libusb context
     std::unique_ptr<libusb_context, LibusbContextDeleter> mLibusbContext;
     //! Maps transfer pointers to TransferData
@@ -1106,6 +1225,8 @@ private:
     std::function<void(const std::string&)> mRxCompleteFn;
     //! Contains last libusb error data
     LibusbError mLastLibusbError;
+    //! Set to true on first connection in order to force reset on subsequent connection
+    bool mPreviouslyConnected = false;
 
 }; // class DppDeviceImp
 
@@ -1124,60 +1245,24 @@ DppDevice::~DppDevice()
 std::unique_ptr<DppDevice> DppDevice::find(const std::string& serial)
 {
     std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext = make_libusb_context();
-    LibusbDeviceList deviceList(libusbContext);
 
-    for (libusb_device* dev : deviceList)
+    auto foundDevice = find_dpp_device(libusbContext, serial);
+    if (!foundDevice.first || !foundDevice.second)
     {
-        libusb_device_descriptor desc;
-        int r = libusb_get_device_descriptor(dev, &desc);
-        if (r < 0)
-        {
-            continue;
-        }
-
-        if (desc.idVendor != 0x1209 || desc.idProduct != 0x2F07)
-        {
-            continue;
-        }
-
-        std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> deviceHandle = make_libusb_device_handle(dev);
-        if (!deviceHandle)
-        {
-            continue;
-        }
-
-        unsigned char serial_string[256];
-        if (desc.iSerialNumber > 0)
-        {
-            r = libusb_get_string_descriptor_ascii(
-                deviceHandle.get(),
-                desc.iSerialNumber,
-                serial_string,
-                sizeof(serial_string)
-            );
-
-            if (r > 0)
-            {
-                std::string device_serial(reinterpret_cast<char*>(serial_string));
-                if (device_serial == serial)
-                {
-                    struct DppDeviceFactory : public DppDevice
-                    {
-                        DppDeviceFactory(std::unique_ptr<class DppDeviceImp>&& dev) : DppDevice(std::move(dev)) {}
-                    };
-
-                    return std::make_unique<DppDeviceFactory>(std::make_unique<DppDeviceImp>(
-                        serial,
-                        desc,
-                        std::move(libusbContext),
-                        std::move(deviceHandle)
-                    ));
-                }
-            }
-        }
+        return nullptr;
     }
 
-    return nullptr;
+    struct DppDeviceFactory : public DppDevice
+    {
+        DppDeviceFactory(std::unique_ptr<class DppDeviceImp>&& dev) : DppDevice(std::move(dev)) {}
+    };
+
+    return std::make_unique<DppDeviceFactory>(std::make_unique<DppDeviceImp>(
+        serial,
+        std::move(foundDevice.first),
+        std::move(libusbContext),
+        std::move(foundDevice.second)
+    ));
 }
 
 std::unique_ptr<DppDevice> DppDevice::findAtIndex(std::size_t idx)
@@ -1191,17 +1276,17 @@ std::unique_ptr<DppDevice> DppDevice::findAtIndex(std::size_t idx)
     }
 
     libusb_device* selectedDev = nullptr;
-    libusb_device_descriptor desc;
+    std::unique_ptr<libusb_device_descriptor> desc = std::make_unique<libusb_device_descriptor>();
     std::size_t currentIdx = 0;
     for (libusb_device* dev : deviceList)
     {
-        int r = libusb_get_device_descriptor(dev, &desc);
+        int r = libusb_get_device_descriptor(dev, desc.get());
         if (r < 0)
         {
             continue;
         }
 
-        if (desc.idVendor != 0x1209 || desc.idProduct != 0x2F07)
+        if (desc->idVendor != 0x1209 || desc->idProduct != 0x2F07)
         {
             continue;
         }
@@ -1227,7 +1312,7 @@ std::unique_ptr<DppDevice> DppDevice::findAtIndex(std::size_t idx)
     unsigned char serial_string[256];
     int r = libusb_get_string_descriptor_ascii(
         deviceHandle.get(),
-        desc.iSerialNumber,
+        desc->iSerialNumber,
         serial_string,
         sizeof(serial_string)
     );
@@ -1243,7 +1328,7 @@ std::unique_ptr<DppDevice> DppDevice::findAtIndex(std::size_t idx)
 
     return std::make_unique<DppDeviceFactory>(std::make_unique<DppDeviceImp>(
         std::string(reinterpret_cast<char*>(serial_string)),
-        desc,
+        std::move(desc),
         std::move(libusbContext),
         std::move(deviceHandle)
     ));
@@ -1289,6 +1374,11 @@ std::string DppDevice::getSerialAt(std::size_t idx)
 const std::string& DppDevice::getSerial() const
 {
     return mImp->mSerial;
+}
+
+std::array<std::uint8_t, 3> DppDevice::getVersion() const
+{
+    return mImp->getVersion();
 }
 
 std::string DppDevice::getLastErrorStr()

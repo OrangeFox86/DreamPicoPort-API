@@ -120,11 +120,13 @@ public:
     //! @return the serial of this device
     const std::string& getSerial() const;
 
+    //! @return USB version number {major, minor, patch}
+    std::array<std::uint8_t, 3> getVersion() const;
+
     //! @return string representation of last error
     std::string getLastErrorStr();
 
     //! Connect to the device and start operation threads. If already connected, disconnect before reconnecting.
-    //! @note connection may fail with "Access denied" if attempt is made to connect immediately after disconnect
     //! @param[in] fn When true is returned, this is the function to execute when receive completes
     //! @return false on failure and getLastErrorStr() will return error description
     //! @return true if connection succeeded

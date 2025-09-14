@@ -11,6 +11,7 @@ if (DREAM_PICO_PORT_CONAN_BUILD)
     # Use conan build of libusb
     find_package(libusb REQUIRED)
     message(STATUS "libusb: ${libusb_DIR}")
+    set(LIBUSB_LIBRARY_NAME "libusb::libusb")
 else()
     # Build from local libusb
     option(LIBUSB_BUILD_SHARED_LIBS ${DREAMPICOPORT_API_BUILD_SHARED_LIBS})
@@ -20,6 +21,7 @@ else()
     else()
         message(STATUS "Skipping include of cmake-libusb")
     endif()
+    set(LIBUSB_LIBRARY_NAME "${EXTERNAL_LIBUSB_LIBRARY_NAME}")
 endif()
 
 add_subdirectory("src")

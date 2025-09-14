@@ -18,17 +18,10 @@ else()
   add_library(dream_pico_port_api STATIC ${SRC})
 endif()
 
-if (DREAM_PICO_PORT_CONAN_BUILD)
-  target_link_libraries(dream_pico_port_api
-    PRIVATE
-      libusb::libusb
-  )
-else()
-  target_link_libraries(dream_pico_port_api
-    PRIVATE
-      ${EXTERNAL_LIBUSB_LIBRARY_NAME}
-  )
-endif()
+target_link_libraries(dream_pico_port_api
+  PRIVATE
+    ${LIBUSB_LIBRARY_NAME}
+)
 
 # For the most part, this lib is C++11 compatible, but std::make_unique() is used which is C++14
 # I'm choosing C++17 just because C++14 was less adopted so may as well go to the next notch

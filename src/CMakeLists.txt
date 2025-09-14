@@ -4,11 +4,31 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 
 file(GLOB SRC "${CMAKE_CURRENT_SOURCE_DIR}/*.c*")
 
-add_library(dream_pico_port_api STATIC ${SRC})
-target_link_libraries(dream_pico_port_api
-  PRIVATE
-    usb-1.0
-)
+if (DREAMPICOPORT_API_BUILD_SHARED_LIBS)
+  add_library(dream_pico_port_api SHARED ${SRC})
+  if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    target_compile_definitions(dream_pico_port_api
+        INTERFACE
+            "WIN32_DREAM_PICO_PORT_IMPORTS"
+        PRIVATE
+            "WIN32_DREAM_PICO_PORT_EXPORTS"
+    )
+  endif()
+else()
+  add_library(dream_pico_port_api STATIC ${SRC})
+endif()
+
+if (DREAM_PICO_PORT_CONAN_BUILD)
+  target_link_libraries(dream_pico_port_api
+    PRIVATE
+      libusb::libusb
+  )
+else()
+  target_link_libraries(dream_pico_port_api
+    PRIVATE
+      ${EXTERNAL_LIBUSB_LIBRARY_NAME}
+  )
+endif()
 
 # For the most part, this lib is C++11 compatible, but std::make_unique() is used which is C++14
 # I'm choosing C++17 just because C++14 was less adopted so may as well go to the next notch
@@ -20,3 +40,38 @@ set_target_properties(dream_pico_port_api PROPERTIES
 target_include_directories(dream_pico_port_api
   PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
+
+install(
+    TARGETS
+        dream_pico_port_api
+    EXPORT
+        dream_pico_port_api
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Development
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Development
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT Development
+)
+if((BUILD_SHARED_LIBS) AND (CMAKE_SYSTEM_NAME STREQUAL "Windows"))
+    set_target_properties(dream_pico_port_api
+        PROPERTIES
+            VS_DEBUGGER_ENVIRONMENT
+            "PATH=${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}"
+    )
+
+    install(
+        FILES
+            "$<TARGET_PDB_FILE:dream_pico_port_api>"
+        DESTINATION
+            "${CMAKE_INSTALL_BINDIR}"
+        COMPONENT Development
+        OPTIONAL
+    )
+endif()
+install(
+    DIRECTORY
+        "${CMAKE_CURRENT_SOURCE_DIR}/"
+    DESTINATION
+        "${CMAKE_INSTALL_INCLUDEDIR}/dream_pico_port_api"
+    COMPONENT Development
+    FILES_MATCHING PATTERN
+        "*.h*"
+)

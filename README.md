@@ -28,8 +28,13 @@ Install MSVC C++ compiler. This can be done by simply installing Visual Studio w
 
 ## Compile
 
-Execute the following to compile.
+Execute the following to compile using cmake.
 ```bash
 cmake --no-warn-unused-cli -S. -B./build
 cmake --build ./build --config Release -j 10
+```
+
+Alternatively, conan may be used.
+```bash
+conan create .
 ```

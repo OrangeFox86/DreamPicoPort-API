@@ -20,7 +20,7 @@ endif()
 
 target_link_libraries(dream_pico_port_api
   PRIVATE
-    ${LIBUSB_LIBRARY_NAME}
+    ${DREAMPICOPORT_LIBUSB_LIBRARY_NAME}
 )
 
 # For the most part, this lib is C++11 compatible, but std::make_unique() is used which is C++14

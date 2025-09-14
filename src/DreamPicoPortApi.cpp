@@ -717,6 +717,7 @@ public:
             transfer->actual_length = 0;
         }
 
+        bool stallDetected = mRxStalled;
         bool allowNewTransfer = false;
 
         if (mInterfaceClaimed && !mExitRequested)
@@ -738,11 +739,10 @@ public:
 
                 case LIBUSB_TRANSFER_STALL:
                 {
-                    // This occurrs if device is physically disconnected. A STALL should not ocurr within normal
-                    // operation. If it does, the application may try to reconnect.
-
                     mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - stall");
                     allowNewTransfer = false;
+                    // Set stallDetected which will prevent device from closing unless other errors occur
+                    stallDetected = true;
                 }
                 break;
 
@@ -812,8 +812,20 @@ public:
             // Erase the transfer from the map which should automatically free the transfer data
             mTransferDataMap.erase(transfer);
 
-            // Cancel all other transfers
-            stopRead();
+            if (stallDetected)
+            {
+                if (!mRxStalled)
+                {
+                    // Only cancel all other transfers without completely stopping read
+                    mRxStalled = true;
+                    cancelTransfers();
+                }
+            }
+            else
+            {
+                // Cancel all other transfers
+                stopRead();
+            }
         }
     }
 
@@ -896,6 +908,7 @@ public:
         }
 
         mExitRequested = false;
+        mRxStalled = false;
         mRxFn = rxFn;
         mRxCompleteFn = completeFn;
 
@@ -905,7 +918,30 @@ public:
             {
                 while (mInterfaceClaimed && !mExitRequested)
                 {
-                    libusb_handle_events(mLibusbContext.get()); // Process pending events and call callbacks
+                    if (mRxStalled && mTransferDataMap.empty())
+                    {
+                        int r = libusb_clear_halt(mLibusbDeviceHandle.get(), mEpIn);
+                        if (r < 0)
+                        {
+                            mLastLibusbError.saveError(r, "libusb_clear_halt");
+                            mExitRequested = true;
+                            break;
+                        }
+
+                        if (!createTransfers())
+                        {
+                            mExitRequested = true;
+                            break;
+                        }
+                    }
+
+                    int r = libusb_handle_events(mLibusbContext.get());
+                    if (r < 0)
+                    {
+                        mLastLibusbError.saveError(r, "libusb_handle_events");
+                        mExitRequested = true;
+                        break;
+                    }
                 }
 
                 if (mRxCompleteFn)
@@ -926,7 +962,14 @@ public:
         // Flag the thread to exit
         mExitRequested = true;
 
-        // Cancel any transfers in progress
+        // Cancel any transfers in progress in order to wake read thread
+        cancelTransfers();
+    }
+
+    void cancelTransfers()
+    {
+        std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
+
         for (auto& pair : mTransferDataMap)
         {
             libusb_cancel_transfer(pair.second->tranfer.get());
@@ -1045,6 +1088,8 @@ private:
     bool mInterfaceClaimed = false;
     //! Set to true when read thread starts, set to false to cause read thread to exit
     bool mExitRequested = false;
+    //! Set when RX experienced a STALL and automatic recovery should be attempted
+    bool mRxStalled = false;
     //! The IN endpoint of kInterfaceNumber where bulk data is read
     std::uint8_t mEpIn = 0;
     //! The IN endpoint of kInterfaceNumber where bulk data is written

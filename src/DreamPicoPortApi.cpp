@@ -366,7 +366,6 @@ public:
     {
         closeInterface();
         joinRead();
-        reset();
 
         // Reset libusb pointers in the correct order
         mLibusbDeviceHandle.reset();
@@ -386,7 +385,7 @@ public:
         if (mPreviouslyConnected || !mLibusbDeviceHandle)
         {
             // Reset and attempt to reconnect
-            reset();
+            mLibusbDeviceHandle.reset();
 
             auto foundDevice = find_dpp_device(mLibusbContext, mSerial);
             if (!foundDevice.first || !foundDevice.second)
@@ -1116,29 +1115,6 @@ public:
         }
 
         return result;
-    }
-
-    //! Attempts to reset the device
-    //! @return true if device has been reset
-    bool reset()
-    {
-        if (mLibusbDeviceHandle)
-        {
-            // TODO: This is probematic on Windows - test in Linux
-            // Attempt to reset the device
-            // int r = libusb_reset_device(mLibusbDeviceHandle.get());
-
-            // Delete the handle since it is no longer valid
-            mLibusbDeviceHandle.reset();
-
-            // if (r < 0)
-            // {
-            //     mLastLibusbError.saveError(r, "libusb_reset_device");
-            //     return false;
-            // }
-        }
-
-        return true;
     }
 
     //! @return description of the last experienced error

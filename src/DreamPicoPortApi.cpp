@@ -200,11 +200,7 @@ public:
         mSerial(serial),
         mDesc(desc),
         mLibusbContext(std::move(libusbContext)),
-        mLibusbDeviceHandle(std::move(libusbDeviceHandle)),
-        mInterfaceClaimed(false),
-        mEpIn(0),
-        mEpOut(0),
-        mReadThread()
+        mLibusbDeviceHandle(std::move(libusbDeviceHandle))
     {
     }
 
@@ -212,6 +208,9 @@ public:
     ~DppDeviceImp()
     {
         closeInterface();
+        joinRead();
+
+        // Reset libusb pointers in the correct order
         mLibusbDeviceHandle.reset();
         mTransferDataMap.clear();
         mLibusbContext.reset();
@@ -221,8 +220,6 @@ public:
     //! @return true if interface was successfully claimed or was already claimed
     bool openInterface()
     {
-        std::lock_guard<std::mutex> lock(mMutex);
-
         if (mInterfaceClaimed)
         {
             return true;
@@ -704,48 +701,63 @@ public:
         }
     }
 
-    bool submitNewTransfer()
+    //! Create all libusb transfers
+    //! @return true iff all transfers were created
+    bool createTransfers()
     {
-        std::unique_ptr<TransferData> transferData;
+        bool success = true;
 
+        for (std::uint32_t i = 0; i < kNumTransfers; ++i)
         {
-            libusb_transfer *transfer = libusb_alloc_transfer(0); // 0 for default number of ISO packets
-            if (!transfer)
+            std::unique_ptr<TransferData> transferData;
+
             {
-                mLastLibusbError = LIBUSB_ERROR_NO_MEM;
-                return false;
+                libusb_transfer *transfer = libusb_alloc_transfer(0); // 0 for default number of ISO packets
+                if (!transfer)
+                {
+                    mLastLibusbError = LIBUSB_ERROR_NO_MEM;
+                    success = false;
+                    break;
+                }
+                transferData = std::make_unique<TransferData>();
+                transferData->tranfer.reset(transfer);
             }
-            transferData = std::make_unique<TransferData>();
-            transferData->tranfer.reset(transfer);
+
+            transferData->buffer.resize(kRxSize);
+
+            libusb_fill_bulk_transfer(
+                transferData->tranfer.get(),
+                mLibusbDeviceHandle.get(),
+                mEpIn,
+                &transferData->buffer[0],
+                transferData->buffer.size(),
+                on_libusb_transfer_complete,
+                this,
+                0
+            );
+
+            {
+                std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
+
+                int r = libusb_submit_transfer(transferData->tranfer.get());
+                if (r < 0)
+                {
+                    mLastLibusbError = r;
+                    success = false;
+                    break;
+                }
+
+                mTransferDataMap.insert(std::make_pair(transferData->tranfer.get(), std::move(transferData)));
+            }
         }
 
-        transferData->buffer.resize(kRxSize);
-
-        libusb_fill_bulk_transfer(
-            transferData->tranfer.get(),
-            mLibusbDeviceHandle.get(),
-            mEpIn,
-            &transferData->buffer[0],
-            transferData->buffer.size(),
-            on_libusb_transfer_complete,
-            this,
-            0
-        );
-
+        if (!success)
         {
             std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
-
-            int r = libusb_submit_transfer(transferData->tranfer.get());
-            if (r < 0)
-            {
-                mLastLibusbError = r;
-                return false;
-            }
-
-            mTransferDataMap.insert(std::make_pair(transferData->tranfer.get(), std::move(transferData)));
+            mTransferDataMap.clear();
         }
 
-        return true;
+        return success;
     }
 
     //! Starts the read thread
@@ -762,23 +774,16 @@ public:
             return false;
         }
 
+        if (!createTransfers())
+        {
+            return false;
+        }
+
         mExitRequested = false;
-
-        if (!submitNewTransfer())
-        {
-            return false;
-        }
-        if (!submitNewTransfer())
-        {
-            std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
-            mTransferDataMap.clear();
-            return false;
-        }
-
         mRxFn = rxFn;
         mRxCompleteFn = completeFn;
 
-        std::lock_guard<std::mutex> lock(mReadThreadMutex);
+        std::lock_guard<std::recursive_mutex> lock(mReadThreadMutex);
         mReadThread = std::make_unique<std::thread>(
             [this]()
             {
@@ -812,14 +817,25 @@ public:
         }
     }
 
+    // Consumes the read thread so it may be externally joined
+    std::unique_ptr<std::thread> consumeReadThread()
+    {
+        std::unique_ptr<std::thread> readThread;
+        std::lock_guard<std::recursive_mutex> lock(mReadThreadMutex);
+        if (mReadThread && mReadThread->get_id() != std::this_thread::get_id())
+        {
+            readThread = std::move(mReadThread);
+        }
+        return readThread;
+    }
+
     //! Wait for the read thread to complete
     void joinRead()
     {
-        std::lock_guard<std::mutex> lock(mReadThreadMutex);
-        if (mReadThread)
+        std::unique_ptr<std::thread> readThread = consumeReadThread();
+        if (readThread)
         {
-            mReadThread->join();
-            mReadThread.reset();
+            readThread->join();
         }
     }
 
@@ -828,35 +844,30 @@ public:
     bool closeInterface()
     {
         stopRead();
-        joinRead();
 
         bool result = true;
 
+        if (mInterfaceClaimed)
         {
-            std::lock_guard<std::mutex> lock(mMutex);
+            mInterfaceClaimed = false;
 
-            if (mInterfaceClaimed)
+            // Set up control transfer for disconnect message (clears buffers)
+            libusb_control_transfer(
+                mLibusbDeviceHandle.get(),
+                LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_OUT,
+                0x22, // bRequest
+                0x00, // wValue (disconnection)
+                kInterfaceNumber, // wIndex
+                nullptr, // data buffer
+                0,    // wLength
+                1000  // timeout in milliseconds
+            );
+
+            int r = libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
+            if (r < 0)
             {
-                mInterfaceClaimed = false;
-
-                // Set up control transfer for disconnect message (clears buffers)
-                libusb_control_transfer(
-                    mLibusbDeviceHandle.get(),
-                    LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_OUT,
-                    0x22, // bRequest
-                    0x00, // wValue (disconnection)
-                    kInterfaceNumber, // wIndex
-                    nullptr, // data buffer
-                    0,    // wLength
-                    1000  // timeout in milliseconds
-                );
-
-                int r = libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
-                if (r < 0)
-                {
-                    mLastLibusbError = r;
-                    result = false;
-                }
+                mLastLibusbError = r;
+                result = false;
             }
         }
 
@@ -871,7 +882,11 @@ public:
 	        case LIBUSB_SUCCESS: return "";
         	case LIBUSB_ERROR_IO: return "Input/Output error";
 	        case LIBUSB_ERROR_INVALID_PARAM: return "Invalid parameter (internal fault)";
+#ifdef __linux__
 	        case LIBUSB_ERROR_ACCESS: return "Access denied (check permissions or udev rules)";
+#else
+	        case LIBUSB_ERROR_ACCESS: return "Access denied";
+#endif
 	        case LIBUSB_ERROR_NO_DEVICE: return "Device not found or disconnected";
             case LIBUSB_ERROR_NOT_FOUND: return "Device, interface, or endpoint not found";
             case LIBUSB_ERROR_BUSY: return "Device is busy";
@@ -893,41 +908,63 @@ public:
         return mInterfaceClaimed;
     }
 
-    const std::string& getSerial() const
-    {
-        return mSerial;
-    }
-
 public:
+    //! The interface number of the WinUSB (vendor) interface
     static const int kInterfaceNumber = 7;
-    const std::string mSerial;
+    //! The magic sequence which starts each packet
     static constexpr const std::uint8_t kMagicSequence[] = {0xDB, 0x8B, 0xAF, 0xD5};
+    //! The number of bytes in the magic sequence
     static constexpr const std::int8_t kSizeMagic = sizeof(kMagicSequence);
+    //! The number of packet size bytes (2 for size and 2 for inverse size)
     static constexpr const std::int8_t kSizeSize = 4;
+    //! Minimum number of bytes used for return address in packet
     static constexpr const std::int8_t kMinSizeAddress = 1;
+    //! Maximum number of bytes used for return address in packet
     static constexpr const std::int8_t kMaxSizeAddress = 9;
+    //! The number of bytes used for command in packet
     static constexpr const std::int8_t kSizeCommand = 1;
+    //! The number of bytes used for CRC at the end of the packet
     static constexpr const std::int8_t kSizeCrc = 2;
+    //! Minimum number of bytes of a packet
     static constexpr const std::int8_t kMinPacketSize =
         kSizeMagic + kSizeSize + kMinSizeAddress + kSizeCommand + kSizeCrc;
 
+    //! The serial number of this device
+    const std::string mSerial;
+
 private:
+    //! The size in bytes of each libusb transfer
     static const std::size_t kRxSize = 2048;
+    //! The number of libusb transfers to create
+    static const std::uint32_t kNumTransfers = 2;
+    //! The device descriptor of this device
     libusb_device_descriptor mDesc;
+    //! Pointer to the libusb context
     std::unique_ptr<libusb_context, LibusbContextDeleter> mLibusbContext;
-    std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> mLibusbDeviceHandle;
-    bool mInterfaceClaimed;
-    bool mExitRequested = false;
-    std::uint8_t mEpIn;
-    std::uint8_t mEpOut;
-    std::unique_ptr<std::thread> mReadThread;
-    std::mutex mReadThreadMutex;
-    std::mutex mMutex;
-    std::vector<std::uint8_t> mReceiveBuffer;
-    std::function<void(uint64_t, uint8_t, const std::vector<std::uint8_t>&)> mRxFn;
-    std::function<void(const char*)> mRxCompleteFn;
-    int mLastLibusbError = LIBUSB_SUCCESS; // TODO: access to this is not serialized
+    //! Maps transfer pointers to TransferData
     std::unordered_map<libusb_transfer*, std::unique_ptr<TransferData>> mTransferDataMap;
+    //! Pointer to the libusb device handle
+    std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> mLibusbDeviceHandle;
+    //! True when interface is claimed
+    bool mInterfaceClaimed = false;
+    //! Set to true when read thread starts, set to false to cause read thread to exit
+    bool mExitRequested = false;
+    //! The IN endpoint of kInterfaceNumber where bulk data is read
+    std::uint8_t mEpIn = 0;
+    //! The IN endpoint of kInterfaceNumber where bulk data is written
+    std::uint8_t mEpOut = 0;
+    //! The read thread created on beginRead()
+    std::unique_ptr<std::thread> mReadThread;
+    //! Serializes access to mReadThread
+    std::recursive_mutex mReadThreadMutex;
+    //! Holds the received data
+    std::vector<std::uint8_t> mReceiveBuffer;
+    //! The function to call whenever a packet is received
+    std::function<void(uint64_t, uint8_t, const std::vector<std::uint8_t>&)> mRxFn;
+    //! The function to call when the read thread exits
+    std::function<void(const char*)> mRxCompleteFn;
+
+    int mLastLibusbError = LIBUSB_SUCCESS;
     std::recursive_mutex mTransferDataMapMutex;
     libusb_hotplug_callback_handle mLibusbHotplugCallbackHandle;
 };
@@ -1123,12 +1160,15 @@ const char* DppDevice::getLastErrorStr()
 
 bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
 {
-    std::lock_guard<std::mutex> lock(mMutex);
-
     if (mConnected)
     {
         return true;
     }
+
+    // To satisfy an edge case, ensure complete disconnection an join before trying to reconnect
+    disconnect();
+
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
 
     if (!mImp->openInterface())
     {
@@ -1143,6 +1183,7 @@ bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
             },
             [this, fn](const char* errStr)
             {
+                disconnect();
                 if (fn)
                 {
                     fn(errStr);
@@ -1162,7 +1203,7 @@ bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
                 std::list<std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>> fns;
 
                 {
-                    std::unique_lock<std::mutex> lock(mMutex);
+                    std::unique_lock<std::mutex> lock(mTimeoutMutex);
 
                     if (mTimeoutLookup.empty())
                     {
@@ -1180,7 +1221,6 @@ bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
                     }
 
                     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-
 
                     for (auto iter = mTimeoutLookup.begin(); iter != mTimeoutLookup.end();)
                     {
@@ -1205,6 +1245,21 @@ bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
                     fn(kCmdTimeout, {});
                 }
             }
+
+
+            std::list<std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>> fns;
+
+            {
+                std::unique_lock<std::mutex> lock(mTimeoutMutex);
+
+                for (FunctionLookupMap::reference entry : mFnLookup)
+                {
+                    fns.push_back(std::move(entry.second.callback));
+                }
+
+                mFnLookup.clear();
+                mTimeoutLookup.clear();
+            }
         }
     );
 
@@ -1216,33 +1271,35 @@ bool DppDevice::connect(const std::function<void(const char* errStr)>& fn)
 bool DppDevice::disconnect()
 {
     bool closed = false;
+    std::unique_ptr<std::thread> readThread;
     std::unique_ptr<std::thread> timeoutThread;
-    std::list<std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>> fns;
 
     {
-        std::lock_guard<std::mutex> lock(mMutex);
+        std::lock_guard<std::recursive_mutex> lock(mMutex);
 
         mConnected = false;
 
-        closed = mImp->closeInterface();
         if (mTimeoutThread)
         {
+            std::lock_guard<std::mutex> lock(mTimeoutMutex);
             mTimeoutCv.notify_all();
-            timeoutThread = std::move(mTimeoutThread);
+            if (mTimeoutThread->get_id() != std::this_thread::get_id())
+            {
+                timeoutThread = std::move(mTimeoutThread);
+            }
         }
 
-        for (FunctionLookupMap::reference entry : mFnLookup)
-        {
-            fns.push_back(std::move(entry.second.callback));
-        }
+        readThread = mImp->consumeReadThread();
 
-        mFnLookup.clear();
-        mTimeoutLookup.clear();
+        // Calling this may cause a call to disconnect() from the read thread
+        closed = mImp->closeInterface();
     }
 
-    for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : fns)
+    // Join threads outside of mutex scope
+
+    if (readThread)
     {
-        fn(kCmdDisconnect, {});
+        readThread->join();
     }
 
     if (timeoutThread)
@@ -1258,7 +1315,7 @@ void DppDevice::handleReceive(std::uint64_t addr, std::uint8_t cmd, const std::v
     std::function<void(std::uint8_t cmd, const std::vector<std::uint8_t>& payload)> respFn;
 
     {
-        std::lock_guard<std::mutex> lock(mMutex);
+        std::lock_guard<std::recursive_mutex> lock(mMutex);
         FunctionLookupMap::iterator iter = mFnLookup.find(addr);
         if (iter != mFnLookup.end())
         {
@@ -1284,7 +1341,7 @@ std::uint64_t DppDevice::send(
     std::uint64_t addr = 0;
 
     {
-        std::lock_guard<std::mutex> lock(mMutex);
+        std::lock_guard<std::recursive_mutex> lock(mMutex);
 
         if (mNextAddr < kMinAddr)
         {
@@ -1300,6 +1357,8 @@ std::uint64_t DppDevice::send(
 
         if (respFn)
         {
+            std::lock_guard<std::mutex> lock(mTimeoutMutex);
+
             FunctionLookupMapEntry entry;
             entry.callback = respFn;
             entry.timeoutMapIter = mTimeoutLookup.insert(std::make_pair(
@@ -1308,6 +1367,7 @@ std::uint64_t DppDevice::send(
             ));
 
             mFnLookup[addr] = std::move(entry);
+
             mTimeoutCv.notify_all();
         }
     }
@@ -1682,7 +1742,7 @@ bool DppDevice::isConnected()
 
 std::size_t DppDevice::getNumWaiting()
 {
-    std::lock_guard<std::mutex> lock(mMutex);
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     // Size of both of these maps should be equal
     return (std::max)(mFnLookup.size(), mTimeoutLookup.size());
 }

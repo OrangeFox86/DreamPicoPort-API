@@ -124,12 +124,13 @@ public:
     const char* getLastErrorStr();
 
     //! Connect to the device and start operation threads
+    //! @note connection may fail with "Access denied" if attempt is made to connect immediately after disconnect
     //! @param[in] fn When true is returned, this is the function to execute when receive completes
     //! @return false on failure and getLastErrorStr() will return error description
     //! @return true if connection succeeded
     bool connect(const std::function<void(const char* errStr)>& fn = nullptr);
 
-    //! Disconnect from the previously connected device, stop all threads, and wait for them to join
+    //! Disconnect from the previously connected device and stop all threads
     //! @return false on failure and getLastErrorStr() will return error description
     //! @return true if disconnection succeeded or was already disconnected
     bool disconnect();
@@ -335,8 +336,10 @@ private:
     std::unique_ptr<std::thread> mTimeoutThread;
     //! Condition variable signaled when data is added to one of the lookups, waited on within mTimeoutThread
     std::condition_variable mTimeoutCv;
-    //! Mutex used to serialize access to class data and mTimeoutCv
-    std::mutex mMutex;
+    //! Mutex used to serialize access to mFnLookup, mTimeoutLookup, and mTimeoutCv
+    std::mutex mTimeoutMutex;
+    //! Mutex used to serialize access to class data
+    std::recursive_mutex mMutex;
 };
 
 }

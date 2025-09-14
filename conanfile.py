@@ -46,8 +46,8 @@ class DreamPicoPortConan(ConanFile):
         tc = CMakeToolchain(self)
 
         tc.variables["DREAM_PICO_PORT_CONAN_BUILD"] = True
-        tc.variables["DREAMPICOPORT_API_BUILD_SHARED_LIBS"] = self.options.get_safe("shared", False)
-        tc.variables["DREAMPICOPORT_TESTS"] = self.options.get_safe("tests", False)
+        tc.variables["DREAMPICOPORT_API_BUILD_SHARED_LIBS"] = bool(self.options.get_safe("shared", False))
+        tc.variables["DREAMPICOPORT_TESTS"] = bool(self.options.get_safe("tests", False))
 
         tc.generate()
 

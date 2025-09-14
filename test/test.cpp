@@ -252,7 +252,8 @@ int main(int argc, char **argv)
     std::unique_ptr<dpp_api::DppDevice> dppDevice = dpp_api::DppDevice::findAtIndex(0);
     if (dppDevice)
     {
-        printf("FOUND!\n");
+        std::array<std::uint8_t, 3> ver = dppDevice->getVersion();
+        printf("FOUND! v%hhu.%hhu.%hhu\n", ver[0], ver[1], ver[2]);
         if (!dppDevice->connect(read_complete))
         {
             printf("Failed to connect: %s\n", dppDevice->getLastErrorStr().c_str());

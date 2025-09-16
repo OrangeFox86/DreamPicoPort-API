@@ -2,6 +2,8 @@ from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps
 from conan.tools.files import copy as conan_copy
 import os
+import sys
+import time
 
 class DreamPicoPortConan(ConanFile):
     name = "dream_pico_port_api"
@@ -56,6 +58,8 @@ class DreamPicoPortConan(ConanFile):
         deps.generate()
 
     def build(self):
+        print("***\n*** WARNING: using libusb from conancenter is currently problematic for Windows builds\n***", file=sys.stderr)
+        time.sleep(3)
         cmake = CMake(self)
         cmake.configure(cli_args=["--no-warn-unused-cli"])
         cmake.build()

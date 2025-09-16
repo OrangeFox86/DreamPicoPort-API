@@ -987,7 +987,7 @@ public:
     //! @param[in] completeFn The function to call on disconnect
     //! @return true if interface was open or opened and read thread was started
     bool beginRead(
-        const std::function<void(uint64_t, uint8_t, const std::vector<std::uint8_t>&)>& rxFn,
+        const std::function<void(uint64_t, uint8_t, std::vector<std::uint8_t>&)>& rxFn,
         const std::function<void(const std::string&)>& completeFn
     )
     {
@@ -1218,7 +1218,7 @@ private:
     //! Holds the received data
     std::vector<std::uint8_t> mReceiveBuffer;
     //! The function to call whenever a packet is received
-    std::function<void(uint64_t, uint8_t, const std::vector<std::uint8_t>&)> mRxFn;
+    std::function<void(uint64_t, uint8_t, std::vector<std::uint8_t>&)> mRxFn;
     //! The function to call when the read thread exits
     std::function<void(const std::string&)> mRxCompleteFn;
     //! Contains last libusb error data
@@ -1227,6 +1227,255 @@ private:
     bool mPreviouslyConnected = false;
 
 }; // class DppDeviceImp
+
+//
+// Message tx and rx definitions
+//
+
+std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::Maple32::get() const
+{
+    std::vector<std::uint8_t> packet8;
+    packet8.reserve(packet.size() * 4);
+    for (std::uint32_t word : packet)
+    {
+        std::uint8_t buffer[4];
+        DppDeviceImp::uint32ToBytes(buffer, word);
+        packet8.insert(packet8.end(), buffer, buffer + 4);
+    }
+
+    return std::make_pair('0', std::move(packet8));
+}
+
+void msg::rx::Maple32::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
+{
+    this->cmd = cmd;
+
+    packet.clear();
+    packet.reserve(payload.size() / 4);
+    for (std::size_t i = 0; (i + 4) <= payload.size(); i+=4)
+    {
+        packet.push_back(DppDeviceImp::bytesToUint32(&payload[i]));
+    }
+}
+
+std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::Maple::get() const
+{
+    return std::make_pair('0', packet);
+}
+
+void msg::rx::Maple::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
+{
+    this->cmd = cmd;
+    packet = std::move(payload);
+}
+
+std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::PlayerReset::get() const
+{
+    std::vector<std::uint8_t> payload;
+    payload.reserve(2);
+    payload.push_back('-');
+    if (idx >= 0)
+    {
+        payload.push_back(idx);
+    }
+
+    return std::make_pair('X', std::move(payload));
+}
+
+void msg::rx::PlayerReset::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
+{
+    this->cmd = cmd;
+
+    if (cmd == kCmdSuccess && !payload.empty())
+    {
+        numReset = payload[0];
+    }
+}
+
+std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::ChangePlayerDisplay::get() const
+{
+    std::vector<std::uint8_t> payload;
+    payload.reserve(3);
+    payload.push_back('P');
+    payload.push_back(idx);
+    payload.push_back(toIdx);
+
+    return std::make_pair('X', std::move(payload));
+}
+
+void msg::rx::ChangePlayerDisplay::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
+{
+    this->cmd = cmd;
+}
+
+std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::GetDcSummary::get() const
+{
+    std::vector<std::uint8_t> payload;
+    payload.reserve(2);
+    payload.push_back('?');
+    payload.push_back(idx);
+
+    return std::make_pair('X', std::move(payload));
+}
+
+void msg::rx::GetDcSummary::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
+{
+    this->cmd = cmd;
+
+    std::size_t pidx = 0;
+    while (pidx < payload.size())
+    {
+        std::list<std::array<uint32_t, 2>> currentPeriph;
+        std::array<std::uint32_t, 2> arr;
+        std::size_t aidx = 0;
+        // Pipe means that 4-byte function data should follow (should be in pairs)
+        while (pidx < payload.size() && payload[pidx] == '|')
+        {
+            ++pidx; // skip past pipe
+            if (pidx + 4 <= payload.size())
+            {
+                arr[aidx++] = DppDeviceImp::bytesToUint32(&payload[pidx]);
+                if (aidx >= arr.size())
+                {
+                    currentPeriph.push_back(std::move(arr));
+                    aidx = 0;
+                }
+                pidx += 4;
+            }
+            else
+            {
+                // Not enough data - skip to the end
+                pidx = payload.size();
+            }
+        }
+
+        // Add the accumulated peripheral data
+        summary.push_back(std::move(currentPeriph));
+
+        if (pidx < payload.size())
+        {
+            // This is assumed to be a semicolon which terminates the current peripheral
+            ++pidx;
+        }
+    }
+}
+
+std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::GetInterfaceVersion::get() const
+{
+    std::vector<std::uint8_t> payload(1, 'V');
+    return std::make_pair('X', std::move(payload));
+}
+
+void msg::rx::GetInterfaceVersion::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
+{
+    this->cmd = cmd;
+
+    if (cmd == kCmdSuccess && payload.size() >= 2)
+    {
+        verMajor = payload[0];
+        verMinor = payload[1];
+    }
+}
+
+std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::GetControllerState::get() const
+{
+    std::vector<std::uint8_t> payload;
+    payload.reserve(2);
+    payload.push_back('R');
+    payload.push_back(idx);
+    return std::make_pair('X', std::move(payload));
+}
+
+void msg::rx::GetControllerState::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
+{
+    this->cmd = cmd;
+
+    if (cmd == kCmdSuccess)
+    {
+        if (payload.size() > 0)
+        {
+            controllerState.x = payload[0];
+        }
+
+        if (payload.size() > 1)
+        {
+            controllerState.y = payload[1];
+        }
+
+        if (payload.size() > 2)
+        {
+            controllerState.z = payload[2];
+        }
+
+        if (payload.size() > 3)
+        {
+            controllerState.rz = payload[3];
+        }
+
+        if (payload.size() > 4)
+        {
+            controllerState.rx = payload[4];
+        }
+
+        if (payload.size() > 5)
+        {
+            controllerState.ry = payload[5];
+        }
+
+        if (payload.size() > 6)
+        {
+            controllerState.hat = static_cast<ControllerState::DpadButtons>(payload[6]);
+        }
+
+        if (payload.size() > 10)
+        {
+            // Button state in little-endian order
+            controllerState.buttons = (
+                (static_cast<std::uint32_t>(payload[7])) |
+                (static_cast<std::uint32_t>(payload[8]) << 8) |
+                (static_cast<std::uint32_t>(payload[9]) << 16) |
+                (static_cast<std::uint32_t>(payload[10]) << 24)
+            );
+        }
+
+        if (payload.size() > 11)
+        {
+            controllerState.pad = payload[11];
+        }
+    }
+}
+
+std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::RefreshGamepad::get() const
+{
+    std::vector<std::uint8_t> payload;
+    payload.reserve(2);
+    payload.push_back('G');
+    payload.push_back(idx);
+    return std::make_pair('X', std::move(payload));
+}
+
+void msg::rx::RefreshGamepad::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
+{
+    this->cmd = cmd;
+}
+
+std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::GetConnectedGamepads::get() const
+{
+    std::vector<std::uint8_t> payload(1, 'O');
+    return std::make_pair('X', std::move(payload));
+}
+
+void msg::rx::GetConnectedGamepads::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
+{
+    this->cmd = cmd;
+
+    std::size_t idx = 0;
+    while (idx < gamepadConnectionStates.size() && idx < payload.size())
+    {
+        gamepadConnectionStates[idx] = static_cast<GamepadConnectionState>(payload[idx]);
+        ++idx;
+    }
+}
 
 //
 // DppDevice definitions
@@ -1398,7 +1647,7 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
 
     if (
         !mImp->beginRead(
-            [this](std::uint64_t addr, std::uint8_t cmd, const std::vector<std::uint8_t>& payload)
+            [this](std::uint64_t addr, std::uint8_t cmd, std::vector<std::uint8_t>& payload)
             {
                 handleReceive(addr, cmd, payload);
             },
@@ -1421,7 +1670,7 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
         {
             while (true)
             {
-                std::list<std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>> fns;
+                std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> fns;
 
                 {
                     std::unique_lock<std::mutex> lock(mTimeoutMutex);
@@ -1463,12 +1712,12 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
 
                 for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : fns)
                 {
-                    fn(kCmdTimeout, {});
+                    fn(::dpp_api::msg::rx::Msg::kCmdTimeout, {});
                 }
             }
 
 
-            std::list<std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>> fns;
+            std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> fns;
 
             {
                 std::unique_lock<std::mutex> lock(mTimeoutMutex);
@@ -1531,9 +1780,9 @@ bool DppDevice::disconnect()
     return closed;
 }
 
-void DppDevice::handleReceive(std::uint64_t addr, std::uint8_t cmd, const std::vector<std::uint8_t>& payload)
+void DppDevice::handleReceive(std::uint64_t addr, std::uint8_t cmd, std::vector<std::uint8_t>& payload)
 {
-    std::function<void(std::uint8_t cmd, const std::vector<std::uint8_t>& payload)> respFn;
+    std::function<void(std::uint8_t cmd, std::vector<std::uint8_t>& payload)> respFn;
 
     {
         std::lock_guard<std::recursive_mutex> lock(mMutex);
@@ -1555,7 +1804,7 @@ void DppDevice::handleReceive(std::uint64_t addr, std::uint8_t cmd, const std::v
 std::uint64_t DppDevice::send(
     std::uint8_t cmd,
     const std::vector<std::uint8_t>& payload,
-    const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>& payload)>& respFn,
+    const std::function<void(std::int16_t cmd, std::vector<std::uint8_t>& payload)>& respFn,
     std::uint32_t timeoutMs
 )
 {
@@ -1594,366 +1843,6 @@ std::uint64_t DppDevice::send(
     }
 
     return (mImp->send(addr, cmd, payload)) ? addr : 0;
-}
-
-std::uint64_t DppDevice::sendMaple(
-    const std::vector<std::uint32_t>& payload,
-    const std::function<void(std::int16_t cmd, const std::vector<std::uint32_t>& payload)>& respFn,
-    std::uint32_t timeoutMs
-)
-{
-    std::vector<std::uint8_t> payload8;
-    payload8.reserve(payload.size() * 4);
-
-    for (std::uint32_t word : payload)
-    {
-        std::uint8_t buffer[4];
-        DppDeviceImp::uint32ToBytes(buffer, word);
-        payload8.insert(payload8.end(), buffer, buffer + 4);
-    }
-
-    if (respFn)
-    {
-        return sendMaple(
-            payload8,
-            [respFn](std::int16_t cmd, const std::vector<std::uint8_t>& payload)
-            {
-                std::vector<std::uint32_t> payload32;
-                payload32.reserve(payload.size() / 4);
-                for (std::size_t i = 0; (i + 4) <= payload.size(); i+=4)
-                {
-                    payload32.push_back(DppDeviceImp::bytesToUint32(&payload[i]));
-                }
-                respFn(cmd, payload32);
-            },
-            timeoutMs
-        );
-    }
-    else
-    {
-        return sendMaple(payload8, nullptr, timeoutMs);
-    }
-}
-
-std::uint64_t DppDevice::sendMaple(
-    const std::vector<std::uint8_t>& payload,
-    const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>& payload)>& respFn,
-    std::uint32_t timeoutMs
-)
-{
-    return send('0', payload, respFn, timeoutMs);
-}
-
-std::uint64_t DppDevice::sendPlayerReset(
-    std::int8_t idx,
-    const std::function<void(std::int16_t cmd, std::uint8_t numReset)>& respFn,
-    std::uint32_t timeoutMs
-)
-{
-    std::vector<std::uint8_t> payload;
-    payload.reserve(2);
-    payload.push_back('-');
-    if (idx >= 0)
-    {
-        payload.push_back(idx);
-    }
-
-    if (respFn)
-    {
-        return send(
-            'X',
-            payload,
-            [respFn](std::int16_t cmd, const std::vector<std::uint8_t>& payload)
-            {
-                std::uint8_t numReset = 0;
-                if (cmd == kCmdSuccess && !payload.empty())
-                {
-                    numReset = payload[0];
-                }
-                respFn(cmd, numReset);
-            },
-            timeoutMs
-        );
-    }
-    else
-    {
-        return send('X', payload, nullptr, timeoutMs);
-    }
-}
-
-std::uint64_t DppDevice::sendChangePlayerDisplay(
-    std::uint8_t idx,
-    std::uint8_t toIdx,
-    const std::function<void(std::int16_t cmd)>& respFn,
-    std::uint32_t timeoutMs
-)
-{
-    std::vector<std::uint8_t> payload;
-    payload.reserve(3);
-    payload.push_back('P');
-    payload.push_back(idx);
-    payload.push_back(toIdx);
-
-    if (respFn)
-    {
-        return send(
-            'X',
-            payload,
-            [respFn](std::int16_t cmd, const std::vector<std::uint8_t>& payload)
-            {
-                respFn(cmd);
-            },
-            timeoutMs
-        );
-    }
-    else
-    {
-        return send('X', payload, nullptr, timeoutMs);
-    }
-}
-
-std::uint64_t DppDevice::sendGetDcSummary(
-    std::uint8_t idx,
-    const std::function<void(std::int16_t cmd, const std::list<std::list<std::array<uint32_t, 2>>>& summary)>& respFn,
-    std::uint32_t timeoutMs
-)
-{
-    std::vector<std::uint8_t> payload;
-    payload.reserve(2);
-    payload.push_back('?');
-    payload.push_back(idx);
-
-    if (respFn)
-    {
-        return send(
-            'X',
-            payload,
-            [respFn](std::int16_t cmd, const std::vector<std::uint8_t>& payload)
-            {
-                std::list<std::list<std::array<uint32_t, 2>>> output;
-                std::size_t pidx = 0;
-                while (pidx < payload.size())
-                {
-                    std::list<std::array<uint32_t, 2>> currentPeriph;
-                    std::array<std::uint32_t, 2> arr;
-                    std::size_t aidx = 0;
-                    // Pipe means that 4-byte function data should follow (should be in pairs)
-                    while (pidx < payload.size() && payload[pidx] == '|')
-                    {
-                        ++pidx; // skip past pipe
-                        if (pidx + 4 <= payload.size())
-                        {
-                            arr[aidx++] = DppDeviceImp::bytesToUint32(&payload[pidx]);
-                            if (aidx >= arr.size())
-                            {
-                                currentPeriph.push_back(arr);
-                                aidx = 0;
-                            }
-                            pidx += 4;
-                        }
-                        else
-                        {
-                            // Not enough data - skip to the end
-                            pidx = payload.size();
-                        }
-                    }
-
-                    // Add the accumulated peripheral data
-                    output.push_back(currentPeriph);
-
-                    if (pidx < payload.size())
-                    {
-                        // This is assumed to be a semicolon which terminates the current peripheral
-                        ++pidx;
-                    }
-                }
-
-                respFn(cmd, output);
-            },
-            timeoutMs
-        );
-    }
-    else
-    {
-        return send('X', payload, nullptr, timeoutMs);
-    }
-}
-
-std::uint64_t DppDevice::sendGetInterfaceVersion(
-    const std::function<void(std::int16_t cmd, std::uint8_t verMajor, std::uint8_t verMinor)>& respFn,
-    std::uint32_t timeoutMs
-)
-{
-    std::vector<std::uint8_t> payload(1, 'V');
-
-    if (respFn)
-    {
-        return send(
-            'X',
-            payload,
-            [respFn](std::int16_t cmd, const std::vector<std::uint8_t>& payload)
-            {
-                std::uint8_t verMajor = 0;
-                std::uint8_t verMinor = 0;
-                if (cmd == kCmdSuccess && payload.size() >= 2)
-                {
-                    verMajor = payload[0];
-                    verMinor = payload[1];
-                }
-                respFn(cmd, verMajor, verMinor);
-            },
-            timeoutMs
-        );
-    }
-    else
-    {
-        return send('X', payload, nullptr, timeoutMs);
-    }
-}
-
-std::uint64_t DppDevice::sendGetControllerState(
-    std::uint8_t idx,
-    const std::function<void(std::int16_t cmd, const ControllerState& controllerState)>& respFn,
-    std::uint32_t timeoutMs
-)
-{
-    std::vector<std::uint8_t> payload;
-    payload.reserve(2);
-    payload.push_back('R');
-    payload.push_back(idx);
-
-    if (respFn)
-    {
-        return send(
-            'X',
-            payload,
-            [respFn](std::int16_t cmd, const std::vector<std::uint8_t>& payload)
-            {
-                ControllerState controllerState;
-                if (cmd == kCmdSuccess)
-                {
-                    if (payload.size() > 0)
-                    {
-                        controllerState.x = payload[0];
-                    }
-
-                    if (payload.size() > 1)
-                    {
-                        controllerState.y = payload[1];
-                    }
-
-                    if (payload.size() > 2)
-                    {
-                        controllerState.z = payload[2];
-                    }
-
-                    if (payload.size() > 3)
-                    {
-                        controllerState.rz = payload[3];
-                    }
-
-                    if (payload.size() > 4)
-                    {
-                        controllerState.rx = payload[4];
-                    }
-
-                    if (payload.size() > 5)
-                    {
-                        controllerState.ry = payload[5];
-                    }
-
-                    if (payload.size() > 6)
-                    {
-                        controllerState.hat = static_cast<ControllerState::DpadButtons>(payload[6]);
-                    }
-
-                    if (payload.size() > 10)
-                    {
-                        // Button state in little-endian order
-                        controllerState.buttons = (
-                            (static_cast<std::uint32_t>(payload[7])) |
-                            (static_cast<std::uint32_t>(payload[8]) << 8) |
-                            (static_cast<std::uint32_t>(payload[9]) << 16) |
-                            (static_cast<std::uint32_t>(payload[10]) << 24)
-                        );
-                    }
-
-                    if (payload.size() > 11)
-                    {
-                        controllerState.pad = payload[11];
-                    }
-                }
-
-                respFn(cmd, controllerState);
-            },
-            timeoutMs
-        );
-    }
-    else
-    {
-        return send('X', payload, nullptr, timeoutMs);
-    }
-}
-
-std::uint64_t DppDevice::sendRefreshGamepad(
-    std::uint8_t idx,
-    const std::function<void(std::int16_t cmd)>& respFn,
-    std::uint32_t timeoutMs
-)
-{
-    std::vector<std::uint8_t> payload;
-    payload.reserve(2);
-    payload.push_back('G');
-    payload.push_back(idx);
-
-    if (respFn)
-    {
-        return send(
-            'X',
-            payload,
-            [respFn](std::int16_t cmd, const std::vector<std::uint8_t>& payload)
-            {
-                respFn(cmd);
-            },
-            timeoutMs
-        );
-    }
-    else
-    {
-        return send('X', payload, nullptr, timeoutMs);
-    }
-}
-
-std::uint64_t DppDevice::sendGetConnectedGamepads(
-    const std::function<void(std::int16_t cmd, const std::array<GamepadConnectionState, 4>& gamepadConnectionStates)>& respFn,
-    std::uint32_t timeoutMs
-)
-{
-    std::vector<std::uint8_t> payload(1, 'O');
-
-    if (respFn)
-    {
-        return send(
-            'X',
-            payload,
-            [respFn](std::int16_t cmd, const std::vector<std::uint8_t>& payload)
-            {
-                std::array<GamepadConnectionState, 4> gamepadConnectionStates;
-                std::size_t idx = 0;
-                while (idx < gamepadConnectionStates.size() && idx < payload.size())
-                {
-                    gamepadConnectionStates[idx] = static_cast<GamepadConnectionState>(payload[idx]);
-                    ++idx;
-                }
-                respFn(cmd, gamepadConnectionStates);
-            },
-            timeoutMs
-        );
-    }
-    else
-    {
-        return send('X', payload, nullptr, timeoutMs);
-    }
 }
 
 bool DppDevice::isConnected()

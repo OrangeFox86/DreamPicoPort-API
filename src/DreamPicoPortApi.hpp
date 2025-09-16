@@ -35,6 +35,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <thread>
+#include <limits>
 
 #if defined(_WIN32)
     #ifdef WIN32_DREAM_PICO_PORT_EXPORTS
@@ -123,6 +124,287 @@ enum class DREAM_PICO_PORT_EXPORT_API GamepadConnectionState : std::uint8_t
     CONNECTED = 2 //!< Gamepad available and connected
 };
 
+// Forward declaration of DppDevice
+class DppDevice;
+
+namespace msg
+{
+namespace rx
+{
+
+struct Msg
+{
+    //! One of kCmd* values
+    std::int16_t cmd = (std::numeric_limits<std::int16_t>::min)();
+
+    //! The cmd response for successful execution
+    static constexpr const std::int16_t kCmdSuccess = 0x0A;
+    //! The cmd response for execution complete with warning
+    static constexpr const std::int16_t kCmdAttention = 0x0B;
+    //! The cmd response for execution failure
+    static constexpr const std::int16_t kCmdFailure = 0x0F;
+    //! The cmd response for invalid command or missing data
+    static constexpr const std::int16_t kCmdInvalid = 0xFE;
+    //! The cmd response value set in the callback when timeout occurred before response received
+    static constexpr const std::int16_t kCmdTimeout = -1;
+    //! The cmd response value set in the callback when device disconnected before response received
+    static constexpr const std::int16_t kCmdDisconnect = -2;
+};
+
+struct Maple32 : Msg
+{
+    //! when cmd is kCmdSuccess, the returned maple payload
+    std::vector<std::uint32_t> packet;
+
+private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
+    virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
+    friend DppDevice;
+};
+
+struct Maple : Msg
+{
+    //! when cmd is kCmdSuccess, the returned maple payload
+    std::vector<std::uint8_t> packet;
+
+private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
+    virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
+    friend DppDevice;
+};
+
+struct PlayerReset : Msg
+{
+    //! Number of players that have been reset
+    std::uint8_t numReset = 0;
+
+private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
+    virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
+    friend DppDevice;
+};
+
+struct ChangePlayerDisplay : Msg
+{
+private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
+    virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
+    friend DppDevice;
+};
+
+struct GetDcSummary : Msg
+{
+    //! When cmd is kCmdSuccess, this contains peripheral summary data
+    //! - Each element in the outer list represents a peripheral in order (first is main)
+    //! - Each element in the inner list represents function definition (max of 3)
+    //! - First array element is function code, second is function definition word
+    std::list<std::list<std::array<uint32_t, 2>>> summary;
+
+private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
+    virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
+    friend DppDevice;
+};
+
+struct GetInterfaceVersion : Msg
+{
+    //! Major version number
+    std::uint8_t verMajor = 0;
+    //! Minor version number
+    std::uint8_t verMinor = 0;
+
+private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
+    virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
+    friend DppDevice;
+};
+
+struct GetControllerState : Msg
+{
+    //! When cmd is kCmdSuccess, the current controller state
+    ControllerState controllerState;
+
+private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
+    virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
+    friend DppDevice;
+};
+
+struct RefreshGamepad : Msg
+{
+private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
+    virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
+    friend DppDevice;
+};
+
+struct GetConnectedGamepads : Msg
+{
+    //! Controller connection state for each controller
+    std::array<GamepadConnectionState, 4> gamepadConnectionStates;
+
+private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
+    virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
+    friend DppDevice;
+};
+
+} // namespace rx
+namespace tx
+{
+
+struct Maple32
+{
+    //! The maple payload which contains at least 1 word (MSB is command)
+    std::vector<std::uint32_t> packet;
+
+    //! The expected response type
+    using ResponseType = rx::Maple32;
+
+private:
+    //! Internally called to pack this message into outgoing data
+    //! @return pair containing command and payload for the message
+    std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
+    friend DppDevice;
+};
+
+struct Maple
+{
+    //! The maple payload which contains at least 4 bytes (first byte is command)
+    std::vector<std::uint8_t> packet;
+
+    //! The expected response type
+    using ResponseType = rx::Maple;
+
+private:
+    //! Internally called to pack this message into outgoing data
+    //! @return pair containing command and payload for the message
+    std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
+    friend DppDevice;
+};
+
+struct PlayerReset
+{
+    //! Player index [0,3] or -1 for all players
+    std::int8_t idx;
+
+    //! The expected response type
+    using ResponseType = rx::PlayerReset;
+
+private:
+    //! Internally called to pack this message into outgoing data
+    //! @return pair containing command and payload for the message
+    std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
+    friend DppDevice;
+};
+
+struct ChangePlayerDisplay
+{
+    //! Player index [0,3] of the target controller
+    std::uint8_t idx;
+    //! Player index [0,3] to change the display to
+    std::uint8_t toIdx;
+
+    //! The expected response type
+    using ResponseType = rx::ChangePlayerDisplay;
+
+private:
+    //! Internally called to pack this message into outgoing data
+    //! @return pair containing command and payload for the message
+    std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
+    friend DppDevice;
+};
+
+struct GetDcSummary
+{
+    //! Player index [0,3] of the target controller
+    std::uint8_t idx;
+
+    //! The expected response type
+    using ResponseType = rx::GetDcSummary;
+
+private:
+    //! Internally called to pack this message into outgoing data
+    //! @return pair containing command and payload for the message
+    std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
+    friend DppDevice;
+};
+
+struct GetInterfaceVersion
+{
+    //! The expected response type
+    using ResponseType = rx::GetInterfaceVersion;
+
+private:
+    //! Internally called to pack this message into outgoing data
+    //! @return pair containing command and payload for the message
+    std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
+    friend DppDevice;
+};
+
+struct GetControllerState
+{
+    //! Player index [0,3] of the target controller
+    std::uint8_t idx;
+
+    //! The expected response type
+    using ResponseType = rx::GetControllerState;
+
+private:
+    //! Internally called to pack this message into outgoing data
+    //! @return pair containing command and payload for the message
+    std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
+    friend DppDevice;
+};
+
+struct RefreshGamepad
+{
+    //! Player index [0,3] of the target controller
+    std::uint8_t idx;
+
+    //! The expected response type
+    using ResponseType = rx::RefreshGamepad;
+
+private:
+    //! Internally called to pack this message into outgoing data
+    //! @return pair containing command and payload for the message
+    std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
+    friend DppDevice;
+};
+
+struct GetConnectedGamepads
+{
+    //! The expected response type
+    using ResponseType = rx::GetConnectedGamepads;
+
+private:
+    //! Internally called to pack this message into outgoing data
+    //! @return pair containing command and payload for the message
+    std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
+    friend DppDevice;
+};
+
+} // namespace tx
+} // namespace msg
+
 class DREAM_PICO_PORT_API DppDevice
 {
 private:
@@ -178,7 +460,7 @@ public:
     //! Send a raw command to DreamPicoPort
     //! @param[in] cmd Raw DreamPicoPort command
     //! @param[in] payload The payload for the command
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
+    //! @param[in] respFn The function to call on received response, timeout, or disconnect with the following arguments
     //!                   cmd: one of the kCmd* values
     //!                   payload: the returned payload
     //! @param[in] timeoutMs Duration to wait before timeout
@@ -187,135 +469,73 @@ public:
     std::uint64_t send(
         std::uint8_t cmd,
         const std::vector<std::uint8_t>& payload,
-        const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>& payload)>& respFn,
+        const std::function<void(std::int16_t cmd, std::vector<std::uint8_t>& payload)>& respFn,
         std::uint32_t timeoutMs = 1000
     );
 
-    //! Send maple packet as 32-bit words
-    //! @param[in] payload The maple payload which contains at least 1 word (MSB is command)
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
-    //!                   cmd: one of the kCmd* values
-    //!                   payload: when cmd is kCmdSuccess, the returned 32-bit maple payload
-    //! @param[in] timeoutMs Duration to wait before timeout
+    //! Send a dpp_api::msg::tx::* type and asynchronously get the associated dpp_api::msg::rx:* type
+    //! @tparam T a dpp_api::msg::tx::* type
+    //! @param[in] tx The transmission data
+    //! @param[in] respFn The function to call on received response, timeout, or disconnect
     //! @return 0 if send failed and getLastErrorStr() will return error description
     //! @return the ID of the sent data
-    std::uint64_t sendMaple(
-        const std::vector<std::uint32_t>& payload,
-        const std::function<void(std::int16_t cmd, const std::vector<std::uint32_t>& payload)>& respFn,
+    template <typename T>
+    std::uint64_t send(
+        const T& tx,
+        const std::function<void(typename T::ResponseType&)>& respFn,
         std::uint32_t timeoutMs = 1000
-    );
+    )
+    {
+        std::pair<std::uint8_t, std::vector<std::uint8_t>> txData = tx.get();
 
-    //! Send maple packet as 8-bit payload
-    //! @param[in] payload The maple payload which contains at least 4 bytes (first byte is command)
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
-    //!                   cmd: one of the kCmd* values
-    //!                   payload: when cmd is kCmdSuccess, the returned 8-bit maple payload
-    //! @param[in] timeoutMs Duration to wait before timeout
-    //! @return 0 if send failed and getLastErrorStr() will return error description
-    //! @return the ID of the sent data
-    std::uint64_t sendMaple(
-        const std::vector<std::uint8_t>& payload,
-        const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>& payload)>& respFn,
-        std::uint32_t timeoutMs = 1000
-    );
+        if (respFn)
+        {
+            return send(
+                txData.first,
+                txData.second,
+                [respFn](std::int16_t cmd, std::vector<std::uint8_t>& payload)
+                {
+                    typename T::ResponseType response;
+                    response.set(cmd, payload);
+                    respFn(response);
+                },
+                timeoutMs
+            );
+        }
+        else
+        {
+            return send(txData.first, txData.second, nullptr, timeoutMs);
+        }
+    }
 
-    //! Send player reset command
-    //! @param[in] idx Player index [0,3] or -1 for all players
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
-    //!                   cmd: one of the kCmd* values
-    //!                   numReset: number of players that have been reset
-    //! @param[in] timeoutMs Duration to wait before timeout
-    //! @return 0 if send failed and getLastErrorStr() will return error description
-    //! @return the ID of the sent data
-    std::uint64_t sendPlayerReset(
-        std::int8_t idx,
-        const std::function<void(std::int16_t cmd, std::uint8_t numReset)>& respFn,
-        std::uint32_t timeoutMs = 1000
-    );
+    //! Send a dpp_api::msg::tx::* type and synchronously get the associated dpp_api::msg::rx:* type
+    //! @tparam T a dpp_api::msg::tx::* type
+    //! @param[in] tx The transmission data
+    //! @return the resulting data
+    template <typename T>
+    typename T::ResponseType send(const T& tx, std::uint32_t timeoutMs = 1000)
+    {
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool done = false;
+        T::ResponseType result;
 
-    //! Change the player display on the upper VMU screen
-    //! @param[in] idx Player index [0,3] of the target controller
-    //! @param[in] toIdx Player index [0,3] to change the display to
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
-    //!                   cmd: one of the kCmd* values
-    //! @param[in] timeoutMs Duration to wait before timeout
-    //! @return 0 if send failed and getLastErrorStr() will return error description
-    //! @return the ID of the sent data
-    std::uint64_t sendChangePlayerDisplay(
-        std::uint8_t idx,
-        std::uint8_t toIdx,
-        const std::function<void(std::int16_t cmd)>& respFn,
-        std::uint32_t timeoutMs = 1000
-    );
+        std::uint64_t v = send(
+            tx,
+            [&mutex, &cv, &done, &result](typename T::ResponseType& response)
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                result = std::move(response);
+                done = true;
+                cv.notify_all();
+            },
+            timeoutMs
+        );
 
-    //! Request Dreamcast peripheral summary
-    //! @param[in] idx Player index [0,3] of the target controller
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
-    //!                   cmd: one of the kCmd* values
-    //!                   summary: when cmd is kCmdSuccess, this contains peripheral summary data
-    //!                            - Each element in the outer list represents a peripheral in order (first is main)
-    //!                            - Each element in the inner list represents function definition (max of 3)
-    //!                            - First array element is function code, second is function definition word
-    //! @param[in] timeoutMs Duration to wait before timeout
-    //! @return 0 if send failed and getLastErrorStr() will return error description
-    //! @return the ID of the sent data
-    std::uint64_t sendGetDcSummary(
-        std::uint8_t idx,
-        const std::function<void(std::int16_t cmd, const std::list<std::list<std::array<uint32_t, 2>>>& summary)>& respFn,
-        std::uint32_t timeoutMs = 1000
-    );
-
-    //! Request emulator command processing interface version
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
-    //!                   cmd: one of the kCmd* values
-    //!                   verMajor: major version number
-    //!                   verMinor: minor version number
-    //! @param[in] timeoutMs Duration to wait before timeout
-    //! @return 0 if send failed and getLastErrorStr() will return error description
-    //! @return the ID of the sent data
-    std::uint64_t sendGetInterfaceVersion(
-        const std::function<void(std::int16_t cmd, std::uint8_t verMajor, std::uint8_t verMinor)>& respFn,
-        std::uint32_t timeoutMs = 1000
-    );
-
-    //! Request controller state
-    //! @param[in] idx Player index [0,3] of the target controller
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
-    //!                   cmd: one of the kCmd* values
-    //!                   controllerState: when cmd is kCmdSuccess, the current controller state
-    //! @param[in] timeoutMs Duration to wait before timeout
-    //! @return 0 if send failed and getLastErrorStr() will return error description
-    //! @return the ID of the sent data
-    std::uint64_t sendGetControllerState(
-        std::uint8_t idx,
-        const std::function<void(std::int16_t cmd, const ControllerState& controllerState)>& respFn,
-        std::uint32_t timeoutMs = 1000
-    );
-
-    //! Requests that the DreamPicoPort refreshes its gamepad state over the HID interface
-    //! @param[in] idx Player index [0,3] of the target controller
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
-    //!                   cmd: one of the kCmd* values
-    //! @param[in] timeoutMs Duration to wait before timeout
-    //! @return 0 if send failed and getLastErrorStr() will return error description
-    //! @return the ID of the sent data
-    std::uint64_t sendRefreshGamepad(
-        std::uint8_t idx,
-        const std::function<void(std::int16_t cmd)>& respFn,
-        std::uint32_t timeoutMs = 1000
-    );
-
-    //! Requests controller connection state for each controller
-    //! @param[in] respFn The function to call on received response or timeout with the following arguments
-    //!                   cmd: one of the kCmd* values
-    //!                   gamepadConnectionStates: controller connection state for each controller
-    //! @param[in] timeoutMs Duration to wait before timeout
-    //! @return 0 if send failed and getLastErrorStr() will return error description
-    //! @return the ID of the sent data
-    std::uint64_t sendGetConnectedGamepads(
-        const std::function<void(std::int16_t cmd, const std::array<GamepadConnectionState, 4>& gamepadConnectionStates)>& respFn,
-        std::uint32_t timeoutMs = 1000
-    );
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [&done](){return done;});
+        return result;
+    }
 
     //! @return true iff currently connected
     bool isConnected();
@@ -328,21 +548,7 @@ private:
     //! @param[in] addr The return address of the received data
     //! @param[in] cmd The command of the received data
     //! @param[in] payload The payload of the received data
-    void handleReceive(std::uint64_t addr, std::uint8_t cmd, const std::vector<std::uint8_t>& payload);
-
-public:
-    //! The cmd response for successful execution
-    static constexpr const std::int16_t kCmdSuccess = 0x0A;
-    //! The cmd response for execution complete with warning
-    static constexpr const std::int16_t kCmdAttention = 0x0B;
-    //! The cmd response for execution failure
-    static constexpr const std::int16_t kCmdFailure = 0x0F;
-    //! The cmd response for invalid command or missing data
-    static constexpr const std::int16_t kCmdInvalid = 0xFE;
-    //! The cmd response value set in the callback when timeout occurred before response received
-    static constexpr const std::int16_t kCmdTimeout = -1;
-    //! The cmd response value set in the callback when device disconnected before response received
-    static constexpr const std::int16_t kCmdDisconnect = -2;
+    void handleReceive(std::uint64_t addr, std::uint8_t cmd, std::vector<std::uint8_t>& payload);
 
 private:
     //! Forward declared pointer to internal implementation class
@@ -352,7 +558,7 @@ private:
     struct FunctionLookupMapEntry
     {
         //! The callback to use when this message is received
-        std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>& payload)> callback;
+        std::function<void(std::int16_t cmd, std::vector<std::uint8_t>& payload)> callback;
         //! Iterator into the timeout map which should be removed once the message is received
         std::multimap<std::chrono::system_clock::time_point, std::uint64_t>::iterator timeoutMapIter;
     };

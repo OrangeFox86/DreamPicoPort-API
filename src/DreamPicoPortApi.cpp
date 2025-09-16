@@ -433,6 +433,8 @@ public:
             return true;
         }
 
+        mLastLibusbError.clearError();
+
         if (mPreviouslyConnected || !mLibusbDeviceHandle)
         {
             // Reset and attempt to reconnect

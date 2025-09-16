@@ -59,7 +59,7 @@ void response(std::int16_t cmd, const std::vector<std::uint8_t>& payload)
     update_response_count();
 }
 
-void response32(const dpp_api::msg::rx::Maple32& msg)
+void response32(dpp_api::msg::rx::Maple32& msg)
 {
     if (msg.cmd < 0)
     {
@@ -78,46 +78,60 @@ void response32(const dpp_api::msg::rx::Maple32& msg)
     update_response_count();
 }
 
-void player_reset_response(std::int16_t cmd, std::uint8_t numReset)
+void player_reset_response(dpp_api::msg::rx::PlayerReset& msg)
 {
-    if (cmd < 0)
+    if (msg.cmd < 0)
     {
         printf("Response timeout\n");
     }
     else
     {
-        printf("Response received; cmd: %02hhx, numReset: %hhu\n", static_cast<std::uint8_t>(cmd), numReset);
+        printf("Response received; cmd: %02hhx, numReset: %hhu\n", static_cast<std::uint8_t>(msg.cmd), msg.numReset);
     }
 
     update_response_count();
 }
 
-void simple_response(std::int16_t cmd)
+void change_player_display_response(dpp_api::msg::rx::ChangePlayerDisplay& msg)
 {
-    if (cmd < 0)
+    if (msg.cmd < 0)
     {
         printf("Response timeout\n");
     }
     else
     {
-        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(cmd));
+        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(msg.cmd));
     }
 
     update_response_count();
 }
 
-void summary_response(std::int16_t cmd, const std::list<std::list<std::array<uint32_t, 2>>>& summary)
+void refresh_gamepad_response(dpp_api::msg::rx::RefreshGamepad& msg)
 {
-    if (cmd < 0)
+    if (msg.cmd < 0)
     {
         printf("Response timeout\n");
     }
     else
     {
-        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(cmd));
+        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(msg.cmd));
+    }
+
+    update_response_count();
+}
+
+void summary_response(dpp_api::msg::rx::GetDcSummary& msg)
+{
+    if (msg.cmd < 0)
+    {
+        printf("Response timeout\n");
+    }
+    else
+    {
+        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(msg.cmd));
         printf("{");
         bool outerFirst = true;
-        for (const std::list<std::array<uint32_t, 2>>& periph : summary)
+        for (const std::list<std::array<uint32_t, 2>>& periph : msg.summary)
         {
             if (!outerFirst)
             {
@@ -148,15 +162,15 @@ void summary_response(std::int16_t cmd, const std::list<std::list<std::array<uin
     update_response_count();
 }
 
-void ver_response(std::int16_t cmd, std::uint8_t verMajor, std::uint8_t verMinor)
+void ver_response(dpp_api::msg::rx::GetInterfaceVersion& msg)
 {
-    if (cmd < 0)
+    if (msg.cmd < 0)
     {
         printf("Response timeout\n");
     }
     else
     {
-        printf("Response received; cmd: %02hhx, ver:%hhu.%hhu\n", static_cast<std::uint8_t>(cmd), verMajor, verMinor);
+        printf("Response received; cmd: %02hhx, ver:%hhu.%hhu\n", static_cast<std::uint8_t>(msg.cmd), msg.verMajor, msg.verMinor);
     }
 
     update_response_count();
@@ -288,6 +302,20 @@ void list_all_devices()
     }
 }
 
+bool parse_send_id(std::uint64_t id, std::uint32_t& numExpected)
+{
+    if (id == 0)
+    {
+        printf("Failed to send\n");
+        return false;
+    }
+
+    ++numExpected;
+    printf("Sent address: %llu\n", static_cast<long long unsigned>(id));
+
+    return true;
+}
+
 int main(int argc, char **argv)
 {
     list_all_devices();
@@ -302,6 +330,11 @@ int main(int argc, char **argv)
         if (!dppDevice->connect(read_complete))
         {
             printf("Failed to connect: %s\n", dppDevice->getLastErrorStr().c_str());
+            return 1;
+        }
+        if (!dppDevice->connect(read_complete))
+        {
+            printf("Failed to reconnect: %s\n", dppDevice->getLastErrorStr().c_str());
             return 1;
         }
 
@@ -325,60 +358,75 @@ int main(int argc, char **argv)
             500
         );
 
-        if (sent == 0)
+        if (!parse_send_id(sent, numExpected))
         {
-            printf("Failed to send\n");
             return 2;
         }
 
-        ++numExpected;
-        printf("Sent address: %llu\n", static_cast<long long unsigned>(sent));
+        sent = dppDevice->send(dpp_api::msg::tx::PlayerReset{0}, player_reset_response, 500);
 
-        // sent = dppDevice->sendPlayerReset(0, player_reset_response, 500);
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
 
-        // sent = dppDevice->sendChangePlayerDisplay(0, 1, simple_response, 500);
+        sent = dppDevice->send(dpp_api::msg::tx::ChangePlayerDisplay{0, 1}, change_player_display_response, 500);
 
-        // sent = dppDevice->sendGetDcSummary(0, summary_response, 500);
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
 
-        // sent = dppDevice->sendGetInterfaceVersion(ver_response, 500);
+        sent = dppDevice->send(dpp_api::msg::tx::GetDcSummary{0}, summary_response, 500);
 
-        // sent = dppDevice->sendGetControllerState(0, controller_state_response, 500);
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
 
-        // sent = dppDevice->sendRefreshGamepad(0, simple_response, 500);
+        sent = dppDevice->send(dpp_api::msg::tx::GetInterfaceVersion{}, ver_response, 500);
+
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
+
+        sent = dppDevice->send(dpp_api::msg::tx::GetControllerState{0}, controller_state_response, 500);
+
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
+
+        sent = dppDevice->send(dpp_api::msg::tx::RefreshGamepad{0}, refresh_gamepad_response, 500);
+
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
 
         sent = dppDevice->send(dpp_api::msg::tx::GetConnectedGamepads{}, controller_connection_response, 500);
 
-        if (sent == 0)
+        if (!parse_send_id(sent, numExpected))
         {
-            printf("Failed to send\n");
             return 2;
         }
 
-        ++numExpected;
-        printf("Sent address: %llu\n", static_cast<long long unsigned>(sent));
-
-        sent = dppDevice->send(dpp_api::msg::tx::GetConnectedGamepads{}, controller_connection_response, 500);
-
-        if (sent == 0)
-        {
-            printf("Failed to send\n");
-            return 2;
-        }
-
-        ++numExpected;
-        printf("Sent address: %llu\n", static_cast<long long unsigned>(sent));
-
+        // Wait until all asynchronous commands fully process
         {
             std::unique_lock<std::mutex> lock(mainMutex);
             std::uint32_t* c = &respCount;
             mainCv.wait_for(lock, std::chrono::milliseconds(1000), [c, numExpected](){return *c >= numExpected;});
         }
 
+        // Test a synchronous command
         dpp_api::msg::rx::GetControllerState st = dppDevice->send(dpp_api::msg::tx::GetControllerState{0}, 500);
         controller_state_response(st);
 
+        // Sleep to test for physical disconnect detection
         // std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 
+        // For confirmation that no asynchronous messages are still waiting
         printf("Num waiting: %i\n", static_cast<int>(dppDevice->getNumWaiting()));
     }
     else

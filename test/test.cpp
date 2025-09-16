@@ -316,6 +316,14 @@ bool parse_send_id(std::uint64_t id, std::uint32_t& numExpected)
     return true;
 }
 
+bool wait_async_complete(std::uint32_t numExpected)
+{
+    std::unique_lock<std::mutex> lock(mainMutex);
+    std::uint32_t* c = &respCount;
+    mainCv.wait_for(lock, std::chrono::milliseconds(1000), [c, numExpected](){return *c >= numExpected;});
+    return (respCount >= numExpected);
+}
+
 int main(int argc, char **argv)
 {
     list_all_devices();
@@ -325,6 +333,9 @@ int main(int argc, char **argv)
 
     if (dppDevice)
     {
+        std::uint64_t sent = 0;
+        std::uint32_t numExpected = 0;
+
         std::array<std::uint8_t, 3> ver = dppDevice->getVersion();
         printf("FOUND! %s v%hhu.%hhu.%hhu\n", dppDevice->getSerial().c_str(), ver[0], ver[1], ver[2]);
         if (!dppDevice->connect(read_complete))
@@ -332,15 +343,19 @@ int main(int argc, char **argv)
             printf("Failed to connect: %s\n", dppDevice->getLastErrorStr().c_str());
             return 1;
         }
+
+        if (!dppDevice->isConnected())
+        {
+            printf("Not actually connected\n");
+            return 1;
+        }
+
+        // Test disconnect and reconnect
         if (!dppDevice->connect(read_complete))
         {
             printf("Failed to reconnect: %s\n", dppDevice->getLastErrorStr().c_str());
             return 1;
         }
-
-        std::uint32_t numExpected = 0;
-
-        std::uint64_t sent = 0;
 
         sent = dppDevice->send(
             dpp_api::msg::tx::Maple32{
@@ -413,11 +428,7 @@ int main(int argc, char **argv)
         }
 
         // Wait until all asynchronous commands fully process
-        {
-            std::unique_lock<std::mutex> lock(mainMutex);
-            std::uint32_t* c = &respCount;
-            mainCv.wait_for(lock, std::chrono::milliseconds(1000), [c, numExpected](){return *c >= numExpected;});
-        }
+        wait_async_complete(numExpected);
 
         // Test a synchronous command
         dpp_api::msg::rx::GetControllerState st = dppDevice->send(dpp_api::msg::tx::GetControllerState{0}, 500);

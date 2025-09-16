@@ -427,6 +427,7 @@ public:
     //! Connect to the device and start operation threads. If already connected, disconnect before reconnecting.
     //! @param[in] fn When true is returned, this is the function that will execute when the device is disconnected
     //!               errStr: the reason for disconnection or empty string if disconnect() was called
+    //!               NOTICE: Any attempt to call connect() within any callback function will always fail
     //! @return false on failure and getLastErrorStr() will return error description
     //! @return true if connection succeeded
     bool connect(const std::function<void(const std::string& errStr)>& fn = nullptr);
@@ -442,6 +443,7 @@ public:
     //! @param[in] respFn The function to call on received response, timeout, or disconnect with the following arguments
     //!                   cmd: one of the kCmd* values
     //!                   payload: the returned payload
+    //!                   NOTICE: Any attempt to call connect() within any callback function will always fail
     //! @param[in] timeoutMs Duration to wait before timeout
     //! @return 0 if send failed and getLastErrorStr() will return error description
     //! @return the ID of the sent data
@@ -456,6 +458,7 @@ public:
     //! @tparam T a dpp_api::msg::tx::* type
     //! @param[in] tx The transmission data
     //! @param[in] respFn The function to call on received response, timeout, or disconnect (may be set to nullptr)
+    //!                   NOTICE: Any attempt to call connect() within any callback function will always fail
     //! @param[in] timeoutMs The maximum amount of time before receiving a response at respFn
     //! @return 0 if send failed and getLastErrorStr() will return error description
     //! @return the ID of the sent data

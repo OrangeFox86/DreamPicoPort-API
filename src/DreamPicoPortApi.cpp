@@ -1115,12 +1115,18 @@ public:
         }
     }
 
+    //! @return true iff the current thread is the read thread
+    bool isThisThreadReading()
+    {
+        return (mReadThread && mReadThread->get_id() == std::this_thread::get_id());
+    }
+
     // Consumes the read thread so it may be externally joined
     std::unique_ptr<std::thread> consumeReadThread()
     {
         std::unique_ptr<std::thread> readThread;
         std::lock_guard<std::recursive_mutex> lock(mReadThreadMutex);
-        if (mReadThread && mReadThread->get_id() != std::this_thread::get_id())
+        if (!isThisThreadReading())
         {
             readThread = std::move(mReadThread);
         }
@@ -1198,6 +1204,13 @@ public:
         version[1] = (bcdVer >> 4) & 0x0F;
         version[2] = (bcdVer) & 0x0F;
         return version;
+    }
+
+    //! Set an error which occurs externally
+    //! @param[in] where Explanation of where the error occurred
+    void setExternalError(const char* where)
+    {
+        mLastLibusbError.saveError(LIBUSB_SUCCESS, where);
     }
 
     //! Retrieve the currently connected interface number (first VENDOR interface)
@@ -1609,6 +1622,13 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
     disconnect();
 
     std::lock_guard<std::recursive_mutex> lock(mMutex);
+
+    // This function may not be called from any callback context (would cause deadlock)
+    if (mImp->isThisThreadReading() || (mTimeoutThread && mTimeoutThread->get_id() == std::this_thread::get_id()))
+    {
+        mImp->setExternalError("connect attempted within callback context");
+        return false;
+    }
 
     if (!mImp->openInterface())
     {

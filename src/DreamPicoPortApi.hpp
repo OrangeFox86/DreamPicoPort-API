@@ -393,7 +393,8 @@ public:
         //! Product ID (not recommended to change this from default unless another device implements this protocol)
         std::uint16_t idProduct = 0x2F07;
         //! Minimum BCD version number (inclusive, default is 1.2.1)
-        //! Note: version 1.2.0 is compatible but contains a bug which only allows for 1 command at a time
+        //! @note Version 1.2.0 is compatible but contains a bug which only allows for 1 command at a time.
+        //!       Any less than version 1.2.0 will not connect.
         std::uint16_t minBcdDevice = 0x0121;
         //! Maximum BCD version number (inclusive, 0xFFFF for no limit)
         std::uint16_t maxBcdDevice = 0xFFFF;
@@ -521,6 +522,16 @@ public:
 
     //! @return number of waiting responses
     std::size_t getNumWaiting();
+
+    //! Retrieve the currently connected interface number (first VENDOR interface found on connect())
+    //! @return the connected interface number
+    int getInterfaceNumber();
+
+    //! @return the currently used IN endpoint
+    std::uint8_t getEpIn();
+
+    //! @return the currently used OUT endpoint
+    std::uint8_t getEpOut();
 
 private:
     //! Handle received data

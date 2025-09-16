@@ -475,7 +475,7 @@ public:
         for (std::uint8_t i = 0; i < configDescriptor->bNumInterfaces; ++i)
         {
             const libusb_interface *itf = &configDescriptor->interface[i];
-            if (itf->altsetting->bInterfaceNumber == kInterfaceNumber)
+            if (itf->num_altsetting > 0 && itf->altsetting[0].bInterfaceClass == LIBUSB_CLASS_VENDOR_SPEC)
             {
                 selectedInterface = itf;
                 break;
@@ -514,11 +514,12 @@ public:
             return false;
         }
 
+        mInterfaceNumber = selectedInterface->altsetting->bInterfaceNumber;
         mEpOut = static_cast<std::uint8_t>(outEndpoint);
         mEpIn = static_cast<std::uint8_t>(inEndpoint);
         configDescriptor.reset();
 
-        int r = libusb_claim_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
+        int r = libusb_claim_interface(mLibusbDeviceHandle.get(), mInterfaceNumber);
         if (r < 0)
         {
             // Handle error - interface claim failed
@@ -532,7 +533,7 @@ public:
             LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_OUT,
             0x22, // bRequest
             0x01, // wValue (connection)
-            kInterfaceNumber, // wIndex
+            mInterfaceNumber, // wIndex
             nullptr, // data buffer
             0,    // wLength
             1000  // timeout in milliseconds
@@ -541,7 +542,7 @@ public:
         if (r < 0)
         {
             // Handle control transfer error
-            libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
+            libusb_release_interface(mLibusbDeviceHandle.get(), mInterfaceNumber);
             mLastLibusbError.saveError(r, "libusb_control_transfer on connect");
             return false;
         }
@@ -1153,13 +1154,13 @@ public:
                     LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_OUT,
                     0x22, // bRequest
                     0x00, // wValue (disconnection)
-                    kInterfaceNumber, // wIndex
+                    mInterfaceNumber, // wIndex
                     nullptr, // data buffer
                     0,    // wLength
                     1000  // timeout in milliseconds
                 );
 
-                int r = libusb_release_interface(mLibusbDeviceHandle.get(), kInterfaceNumber);
+                int r = libusb_release_interface(mLibusbDeviceHandle.get(), mInterfaceNumber);
                 if (r < 0)
                 {
                     mLastLibusbError.saveError(r, "libusb_release_interface");
@@ -1197,9 +1198,26 @@ public:
         return version;
     }
 
+    //! Retrieve the currently connected interface number (first VENDOR interface)
+    //! @return the connected interface number
+    int getInterfaceNumber()
+    {
+        return mInterfaceNumber;
+    }
+
+    //! @return the currently used IN endpoint
+    std::uint8_t getEpIn()
+    {
+        return mEpIn;
+    }
+
+    //! @return the currently used OUT endpoint
+    std::uint8_t getEpOut()
+    {
+        return mEpOut;
+    }
+
 public:
-    //! The interface number of the WinUSB (vendor) interface
-    static const int kInterfaceNumber = 7;
     //! The magic sequence which starts each packet
     static constexpr const std::uint8_t kMagicSequence[] = {0xDB, 0x8B, 0xAF, 0xD5};
     //! The number of bytes in the magic sequence
@@ -1242,9 +1260,11 @@ private:
     bool mExitRequested = false;
     //! Set when RX experienced a STALL and automatic recovery should be attempted
     bool mRxStalled = false;
-    //! The IN endpoint of kInterfaceNumber where bulk data is read
+    //! The interface number of the WinUSB (vendor) interface
+    int mInterfaceNumber = 7;
+    //! The IN endpoint of mInterfaceNumber where bulk data is read
     std::uint8_t mEpIn = 0;
-    //! The IN endpoint of kInterfaceNumber where bulk data is written
+    //! The IN endpoint of mInterfaceNumber where bulk data is written
     std::uint8_t mEpOut = 0;
     //! The read thread created on beginRead()
     std::unique_ptr<std::thread> mReadThread;
@@ -1803,6 +1823,21 @@ std::size_t DppDevice::getNumWaiting()
     std::lock_guard<std::recursive_mutex> lock(mMutex);
     // Size of both of these maps should be equal
     return (std::max)(mFnLookup.size(), mTimeoutLookup.size());
+}
+
+int DppDevice::getInterfaceNumber()
+{
+    return mImp->getInterfaceNumber();
+}
+
+std::uint8_t DppDevice::getEpIn()
+{
+    return mImp->getEpIn();
+}
+
+std::uint8_t DppDevice::getEpOut()
+{
+    return mImp->getEpOut();
 }
 
 } // namespace dpp_api

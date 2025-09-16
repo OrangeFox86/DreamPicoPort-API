@@ -157,9 +157,6 @@ struct Maple32 : Msg
     std::vector<std::uint32_t> packet;
 
 private:
-    //! Internally called to set data based on received payload
-    //! @param[in] cmd The received command
-    //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
     friend DppDevice;
 };
@@ -169,12 +166,10 @@ struct Maple : Msg
     //! when cmd is kCmdSuccess, the returned maple payload
     std::vector<std::uint8_t> packet;
 
-private:
     //! Internally called to set data based on received payload
     //! @param[in] cmd The received command
     //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
-    friend DppDevice;
 };
 
 struct PlayerReset : Msg
@@ -182,22 +177,18 @@ struct PlayerReset : Msg
     //! Number of players that have been reset
     std::uint8_t numReset = 0;
 
-private:
     //! Internally called to set data based on received payload
     //! @param[in] cmd The received command
     //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
-    friend DppDevice;
 };
 
 struct ChangePlayerDisplay : Msg
 {
-private:
     //! Internally called to set data based on received payload
     //! @param[in] cmd The received command
     //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
-    friend DppDevice;
 };
 
 struct GetDcSummary : Msg
@@ -208,12 +199,10 @@ struct GetDcSummary : Msg
     //! - First array element is function code, second is function definition word
     std::list<std::list<std::array<uint32_t, 2>>> summary;
 
-private:
     //! Internally called to set data based on received payload
     //! @param[in] cmd The received command
     //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
-    friend DppDevice;
 };
 
 struct GetInterfaceVersion : Msg
@@ -223,12 +212,10 @@ struct GetInterfaceVersion : Msg
     //! Minor version number
     std::uint8_t verMinor = 0;
 
-private:
     //! Internally called to set data based on received payload
     //! @param[in] cmd The received command
     //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
-    friend DppDevice;
 };
 
 struct GetControllerState : Msg
@@ -236,22 +223,18 @@ struct GetControllerState : Msg
     //! When cmd is kCmdSuccess, the current controller state
     ControllerState controllerState;
 
-private:
     //! Internally called to set data based on received payload
     //! @param[in] cmd The received command
     //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
-    friend DppDevice;
 };
 
 struct RefreshGamepad : Msg
 {
-private:
     //! Internally called to set data based on received payload
     //! @param[in] cmd The received command
     //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
-    friend DppDevice;
 };
 
 struct GetConnectedGamepads : Msg
@@ -259,12 +242,10 @@ struct GetConnectedGamepads : Msg
     //! Controller connection state for each controller
     std::array<GamepadConnectionState, 4> gamepadConnectionStates;
 
-private:
     //! Internally called to set data based on received payload
     //! @param[in] cmd The received command
     //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
-    friend DppDevice;
 };
 
 } // namespace rx
@@ -279,11 +260,9 @@ struct Maple32
     //! The expected response type
     using ResponseType = rx::Maple32;
 
-private:
     //! Internally called to pack this message into outgoing data
     //! @return pair containing command and payload for the message
     std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
-    friend DppDevice;
 };
 
 struct Maple
@@ -294,11 +273,9 @@ struct Maple
     //! The expected response type
     using ResponseType = rx::Maple;
 
-private:
     //! Internally called to pack this message into outgoing data
     //! @return pair containing command and payload for the message
     std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
-    friend DppDevice;
 };
 
 struct PlayerReset
@@ -309,11 +286,9 @@ struct PlayerReset
     //! The expected response type
     using ResponseType = rx::PlayerReset;
 
-private:
     //! Internally called to pack this message into outgoing data
     //! @return pair containing command and payload for the message
     std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
-    friend DppDevice;
 };
 
 struct ChangePlayerDisplay
@@ -326,11 +301,9 @@ struct ChangePlayerDisplay
     //! The expected response type
     using ResponseType = rx::ChangePlayerDisplay;
 
-private:
     //! Internally called to pack this message into outgoing data
     //! @return pair containing command and payload for the message
     std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
-    friend DppDevice;
 };
 
 struct GetDcSummary
@@ -341,11 +314,9 @@ struct GetDcSummary
     //! The expected response type
     using ResponseType = rx::GetDcSummary;
 
-private:
     //! Internally called to pack this message into outgoing data
     //! @return pair containing command and payload for the message
     std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
-    friend DppDevice;
 };
 
 struct GetInterfaceVersion
@@ -353,11 +324,9 @@ struct GetInterfaceVersion
     //! The expected response type
     using ResponseType = rx::GetInterfaceVersion;
 
-private:
     //! Internally called to pack this message into outgoing data
     //! @return pair containing command and payload for the message
     std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
-    friend DppDevice;
 };
 
 struct GetControllerState
@@ -368,11 +337,9 @@ struct GetControllerState
     //! The expected response type
     using ResponseType = rx::GetControllerState;
 
-private:
     //! Internally called to pack this message into outgoing data
     //! @return pair containing command and payload for the message
     std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
-    friend DppDevice;
 };
 
 struct RefreshGamepad
@@ -383,11 +350,9 @@ struct RefreshGamepad
     //! The expected response type
     using ResponseType = rx::RefreshGamepad;
 
-private:
     //! Internally called to pack this message into outgoing data
     //! @return pair containing command and payload for the message
     std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
-    friend DppDevice;
 };
 
 struct GetConnectedGamepads
@@ -395,11 +360,9 @@ struct GetConnectedGamepads
     //! The expected response type
     using ResponseType = rx::GetConnectedGamepads;
 
-private:
     //! Internally called to pack this message into outgoing data
     //! @return pair containing command and payload for the message
     std::pair<std::uint8_t, std::vector<std::uint8_t>> get() const;
-    friend DppDevice;
 };
 
 } // namespace tx
@@ -477,6 +440,7 @@ public:
     //! @tparam T a dpp_api::msg::tx::* type
     //! @param[in] tx The transmission data
     //! @param[in] respFn The function to call on received response, timeout, or disconnect
+    //! @param[in] timeoutMs The maximum amount of time before receiving a response at respFn
     //! @return 0 if send failed and getLastErrorStr() will return error description
     //! @return the ID of the sent data
     template <typename T>
@@ -511,6 +475,7 @@ public:
     //! Send a dpp_api::msg::tx::* type and synchronously get the associated dpp_api::msg::rx:* type
     //! @tparam T a dpp_api::msg::tx::* type
     //! @param[in] tx The transmission data
+    //! @param[in] timeoutMs The maximum amount of time to block before receiving a response
     //! @return the resulting data
     template <typename T>
     typename T::ResponseType send(const T& tx, std::uint32_t timeoutMs = 1000)

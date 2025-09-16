@@ -379,26 +379,40 @@ public:
     //! Destructor
     virtual ~DppDevice();
 
-    //! Find a device by serial
-    //! @param[in] serial The requested device's serial
-    //! @return pointer to the located device
-    //! @return nullptr otherwise
-    static std::unique_ptr<DppDevice> find(const std::string& serial);
+    //! Filter used to find a DreamPicoPort device
+    struct Filter
+    {
+        //! Device serial or empty string for any serial
+        std::string serial = std::string();
+        //! Device index
+        //! @note A device is removed from the searched set if a handle to it has already been made.
+        //!       For example, if find() returns device at index 0, the device at the previous index 1 moves to index 0.
+        std::uint32_t idx = 0;
+        //! Vendor ID (not recommended to change this from default unless another device implements this protocol)
+        std::uint16_t idVendor = 0x1209;
+        //! Product ID (not recommended to change this from default unless another device implements this protocol)
+        std::uint16_t idProduct = 0x2F07;
+        //! Minimum BCD version number (inclusive, default is 1.2.1)
+        //! Note: version 1.2.0 is compatible but contains a bug which only allows for 1 command at a time
+        std::uint16_t minBcdDevice = 0x0121;
+        //! Maximum BCD version number (inclusive, 0xFFFF for no limit)
+        std::uint16_t maxBcdDevice = 0xFFFF;
+    };
 
-    //! Find a device by index
-    //! @param[in] idx 0-based index of device
-    //! @return pointer to the located device
+    //! Find a device
+    //! @param[in] filter The filter parameters
+    //! @return pointer to the located device if found
     //! @return nullptr otherwise
-    static std::unique_ptr<DppDevice> findAtIndex(std::size_t idx);
+    static std::unique_ptr<DppDevice> find(const Filter& filter);
 
+    //! @param[in] filter The filter parameters (idx is ignored)
     //! @return the number of DreamPicoPort devices
-    static std::size_t getCount();
+    static std::uint32_t getCount(const Filter& filter);
 
-    //! Gets the serial at a device index
-    //! @param[in] idx 0-based index of the device
-    //! @return serial at the device index if found
-    //! @return empty string otherwise
-    static std::string getSerialAt(std::size_t idx);
+    //! Sets the maximum return address value used to tag each command
+    //! @note the minimum maximum is 0x0FFFFFFF to ensure proper execution
+    //! @param[in] maxAddr The maximum address value to set
+    static void setMaxAddr(std::uint64_t maxAddr);
 
     //! @return the serial of this device
     const std::string& getSerial() const;
@@ -539,8 +553,8 @@ private:
     std::multimap<std::chrono::system_clock::time_point, std::uint64_t> mTimeoutLookup;
     //! The minimum value for mNextAddr
     static const std::uint64_t kMinAddr = 1;
-    //! The maximum value for mNextAddr (essentially, 4 byte max for address length at 7 bits of data per byte)
-    static const std::uint64_t kMaxAddr = 0x0FFFFFFF;
+    //! The maximum value for mNextAddr
+    static std::uint64_t mMaxAddr;
     //! Next available return address
     std::uint64_t mNextAddr = kMinAddr;
     //! Thread which executes response timeouts

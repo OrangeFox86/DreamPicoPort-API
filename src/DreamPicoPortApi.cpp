@@ -298,16 +298,22 @@ private:
     mutable std::mutex mMutex;
 };
 
-static std::pair<
-    std::unique_ptr<libusb_device_descriptor>,
-    std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter>
-> find_dpp_device(
+struct FindResult
+{
+    std::unique_ptr<libusb_device_descriptor> dev;
+    std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> devHandle;
+    std::string serial;
+    std::int32_t count;
+};
+
+FindResult find_dpp_device(
     const std::unique_ptr<libusb_context, LibusbContextDeleter>& libusbContext,
-    const std::string& serial
+    const DppDevice::Filter& filter
 )
 {
     LibusbDeviceList deviceList(libusbContext);
     std::unique_ptr<libusb_device_descriptor> desc = std::make_unique<libusb_device_descriptor>();
+    std::int32_t currentIndex = 0;
 
     for (libusb_device* dev : deviceList)
     {
@@ -317,7 +323,12 @@ static std::pair<
             continue;
         }
 
-        if (desc->idVendor != 0x1209 || desc->idProduct != 0x2F07)
+        if (desc->idVendor != filter.idVendor || desc->idProduct != filter.idProduct)
+        {
+            continue;
+        }
+
+        if (desc->bcdDevice < filter.minBcdDevice || desc->bcdDevice > filter.maxBcdDevice)
         {
             continue;
         }
@@ -328,28 +339,46 @@ static std::pair<
             continue;
         }
 
-        unsigned char serial_string[256];
+        std::string deviceSerial;
+        unsigned char serialString[256] = {};
         if (desc->iSerialNumber > 0)
         {
             r = libusb_get_string_descriptor_ascii(
                 deviceHandle.get(),
                 desc->iSerialNumber,
-                serial_string,
-                sizeof(serial_string)
+                serialString,
+                sizeof(serialString)
             );
 
-            if (r > 0)
+            if (r >= 0)
             {
-                std::string device_serial(reinterpret_cast<char*>(serial_string));
-                if (device_serial == serial)
+                deviceSerial.assign(reinterpret_cast<char*>(serialString));
+                if (filter.serial.empty() || deviceSerial == filter.serial)
                 {
-                    return std::make_pair(std::move(desc), std::move(deviceHandle));
+                    if (filter.idx < 0 || filter.idx == currentIndex)
+                    {
+                        return FindResult{
+                            std::move(desc),
+                            std::move(deviceHandle),
+                            std::move(deviceSerial),
+                            currentIndex + 1
+                        };
+                    }
+                    else
+                    {
+                        ++currentIndex;
+                    }
                 }
             }
         }
     }
 
-    return std::make_pair(nullptr, nullptr);
+    return FindResult{
+        nullptr,
+        nullptr,
+        std::string(),
+        currentIndex
+    };
 }
 
 //! Implementation class for DppDevice
@@ -409,15 +438,21 @@ public:
             // Reset and attempt to reconnect
             mLibusbDeviceHandle.reset();
 
-            auto foundDevice = find_dpp_device(mLibusbContext, mSerial);
-            if (!foundDevice.first || !foundDevice.second)
+            DppDevice::Filter filter;
+            filter.idVendor = mDesc->idVendor;
+            filter.idProduct = mDesc->idProduct;
+            filter.minBcdDevice = mDesc->bcdDevice;
+            filter.maxBcdDevice = mDesc->bcdDevice;
+            filter.serial = mSerial;
+            FindResult foundDevice = find_dpp_device(mLibusbContext, filter);
+            if (!foundDevice.dev || !foundDevice.devHandle)
             {
                 mLastLibusbError.saveError(LIBUSB_ERROR_NO_DEVICE, "find_dpp_device");
                 return false;
             }
 
-            mDesc = std::move(foundDevice.first);
-            mLibusbDeviceHandle = std::move(foundDevice.second);
+            mDesc = std::move(foundDevice.dev);
+            mLibusbDeviceHandle = std::move(foundDevice.devHandle);
         }
 
         mPreviouslyConnected = true;
@@ -1481,6 +1516,9 @@ void msg::rx::GetConnectedGamepads::set(std::int16_t cmd, std::vector<std::uint8
 // DppDevice definitions
 //
 
+// (essentially, 4 byte max for address length at 7 bits of data per byte)
+std::uint64_t DppDevice::mMaxAddr = 0x0FFFFFFF;
+
 DppDevice::DppDevice(std::unique_ptr<DppDeviceImp>&& dev) : mImp(std::move(dev))
 {}
 
@@ -1489,12 +1527,12 @@ DppDevice::~DppDevice()
     disconnect();
 }
 
-std::unique_ptr<DppDevice> DppDevice::find(const std::string& serial)
+std::unique_ptr<DppDevice> DppDevice::find(const Filter& filter)
 {
     std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext = make_libusb_context();
 
-    auto foundDevice = find_dpp_device(libusbContext, serial);
-    if (!foundDevice.first || !foundDevice.second)
+    FindResult foundDevice = find_dpp_device(libusbContext, filter);
+    if (!foundDevice.dev || !foundDevice.devHandle)
     {
         return nullptr;
     }
@@ -1505,117 +1543,27 @@ std::unique_ptr<DppDevice> DppDevice::find(const std::string& serial)
     };
 
     return std::make_unique<DppDeviceFactory>(std::make_unique<DppDeviceImp>(
-        serial,
-        std::move(foundDevice.first),
+        foundDevice.serial,
+        std::move(foundDevice.dev),
         std::move(libusbContext),
-        std::move(foundDevice.second)
+        std::move(foundDevice.devHandle)
     ));
 }
 
-std::unique_ptr<DppDevice> DppDevice::findAtIndex(std::size_t idx)
+std::uint32_t DppDevice::getCount(const Filter& filter)
 {
     std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext = make_libusb_context();
-    LibusbDeviceList deviceList(libusbContext);
 
-    if (idx >= deviceList.size())
-    {
-        return nullptr;
-    }
+    Filter filterCpy = filter;
+    filterCpy.idx = (std::numeric_limits<std::int32_t>::max)();
+    FindResult foundDevice = find_dpp_device(libusbContext, filterCpy);
 
-    libusb_device* selectedDev = nullptr;
-    std::unique_ptr<libusb_device_descriptor> desc = std::make_unique<libusb_device_descriptor>();
-    std::size_t currentIdx = 0;
-    for (libusb_device* dev : deviceList)
-    {
-        int r = libusb_get_device_descriptor(dev, desc.get());
-        if (r < 0)
-        {
-            continue;
-        }
-
-        if (desc->idVendor != 0x1209 || desc->idProduct != 0x2F07)
-        {
-            continue;
-        }
-
-        if (idx == currentIdx++)
-        {
-            selectedDev = dev;
-            break;
-        }
-    }
-
-    if (!selectedDev)
-    {
-        return nullptr;
-    }
-
-    auto deviceHandle = make_libusb_device_handle(selectedDev);
-    if (!deviceHandle)
-    {
-        return nullptr;
-    }
-
-    unsigned char serial_string[256];
-    int r = libusb_get_string_descriptor_ascii(
-        deviceHandle.get(),
-        desc->iSerialNumber,
-        serial_string,
-        sizeof(serial_string)
-    );
-    if (r < 0)
-    {
-        return nullptr;
-    }
-
-    struct DppDeviceFactory : public DppDevice
-    {
-        DppDeviceFactory(std::unique_ptr<class DppDeviceImp>&& dev) : DppDevice(std::move(dev)) {}
-    };
-
-    return std::make_unique<DppDeviceFactory>(std::make_unique<DppDeviceImp>(
-        std::string(reinterpret_cast<char*>(serial_string)),
-        std::move(desc),
-        std::move(libusbContext),
-        std::move(deviceHandle)
-    ));
+    return foundDevice.count;
 }
 
-std::size_t DppDevice::getCount()
+void DppDevice::setMaxAddr(std::uint64_t maxAddr)
 {
-    std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext = make_libusb_context();
-    LibusbDeviceList deviceList(libusbContext);
-
-    libusb_device* selectedDev = nullptr;
-    libusb_device_descriptor desc;
-    std::size_t count = 0;
-    for (libusb_device* dev : deviceList)
-    {
-        int r = libusb_get_device_descriptor(dev, &desc);
-        if (r < 0)
-        {
-            continue;
-        }
-
-        if (desc.idVendor != 0x1209 || desc.idProduct != 0x2F07)
-        {
-            continue;
-        }
-
-        ++count;
-    }
-
-    return count;
-}
-
-std::string DppDevice::getSerialAt(std::size_t idx)
-{
-    std::unique_ptr<DppDevice> dev = findAtIndex(idx);
-    if (dev)
-    {
-        return dev->getSerial();
-    }
-    return std::string();
+    mMaxAddr = (std::max)(maxAddr, static_cast<std::uint64_t>(0x0FFFFFFF));
 }
 
 const std::string& DppDevice::getSerial() const
@@ -1820,7 +1768,7 @@ std::uint64_t DppDevice::send(
 
         addr = mNextAddr++;
 
-        if (mNextAddr > kMaxAddr)
+        if (mNextAddr > mMaxAddr)
         {
             mNextAddr = kMinAddr;
         }

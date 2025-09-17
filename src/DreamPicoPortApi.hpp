@@ -124,9 +124,6 @@ enum class DREAM_PICO_PORT_EXPORT_API GamepadConnectionState : std::uint8_t
     CONNECTED = 2 //!< Gamepad available and connected
 };
 
-// Forward declaration of DppDevice
-class DppDevice;
-
 namespace msg
 {
 namespace rx
@@ -156,9 +153,10 @@ struct Maple32 : Msg
     //! when cmd is kCmdSuccess, the returned maple payload
     std::vector<std::uint32_t> packet;
 
-private:
+    //! Internally called to set data based on received payload
+    //! @param[in] cmd The received command
+    //! @param[in] payload The received payload
     virtual void set(std::int16_t cmd, std::vector<std::uint8_t>& payload);
-    friend DppDevice;
 };
 
 struct Maple : Msg
@@ -574,6 +572,8 @@ private:
     std::uint64_t mNextAddr = kMinAddr;
     //! Thread which executes response timeouts
     std::unique_ptr<std::thread> mTimeoutThread;
+    //! Mutex which serializes access specifically to mTimeoutThread
+    std::mutex mTimeoutThreadMutex;
     //! Condition variable signaled when data is added to one of the lookups, waited on within mTimeoutThread
     std::condition_variable mTimeoutCv;
     //! Mutex used to serialize access to mFnLookup, mTimeoutLookup, and mTimeoutCv

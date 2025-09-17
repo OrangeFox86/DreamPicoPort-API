@@ -255,7 +255,12 @@ public:
 
         if (where && *where != '\0')
         {
-            return std::string(libusbErrorStr) + std::string(" @ ") + where;
+            std::string errStr(libusbErrorStr);
+            if (!errStr.empty())
+            {
+                errStr += " @ ";
+            }
+            return errStr + where;
         }
 
         return std::string(libusbErrorStr);
@@ -1118,6 +1123,7 @@ public:
     //! @return true iff the current thread is the read thread
     bool isThisThreadReading()
     {
+        std::lock_guard<std::recursive_mutex> lock(mReadThreadMutex);
         return (mReadThread && mReadThread->get_id() == std::this_thread::get_id());
     }
 
@@ -1618,17 +1624,30 @@ std::string DppDevice::getLastErrorStr()
 
 bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn)
 {
-    // To satisfy an edge case, ensure complete disconnection and join before trying to reconnect
-    disconnect();
-
-    std::lock_guard<std::recursive_mutex> lock(mMutex);
-
     // This function may not be called from any callback context (would cause deadlock)
-    if (mImp->isThisThreadReading() || (mTimeoutThread && mTimeoutThread->get_id() == std::this_thread::get_id()))
+    if (mImp->isThisThreadReading())
     {
-        mImp->setExternalError("connect attempted within callback context");
+        mImp->setExternalError("connect attempted within read callback context");
         return false;
     }
+    else
+    {
+        // (never take mMutex after taking mTimeoutThreadMutex)
+        std::lock_guard<std::mutex> lock(mTimeoutThreadMutex);
+        if (mTimeoutThread && mTimeoutThread->get_id() == std::this_thread::get_id())
+        {
+            mImp->setExternalError("connect attempted within timeout callback context");
+            return false;
+        }
+    }
+
+    // To satisfy an edge case, ensure complete disconnection and join before trying to reconnect
+    if (!disconnect())
+    {
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
 
     if (!mImp->openInterface())
     {
@@ -1654,6 +1673,8 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
     {
         return false;
     }
+
+    std::lock_guard<std::mutex> timeoutThreadLock(mTimeoutThreadMutex);
 
     mTimeoutThread = std::make_unique<std::thread>(
         [this]()
@@ -1739,13 +1760,16 @@ bool DppDevice::disconnect()
 
         mConnected = false;
 
-        if (mTimeoutThread)
         {
-            std::lock_guard<std::mutex> lock(mTimeoutMutex);
-            mTimeoutCv.notify_all();
-            if (mTimeoutThread->get_id() != std::this_thread::get_id())
+            std::lock_guard<std::mutex> lock(mTimeoutThreadMutex);
+            if (mTimeoutThread)
             {
-                timeoutThread = std::move(mTimeoutThread);
+                std::lock_guard<std::mutex> lock(mTimeoutMutex);
+                mTimeoutCv.notify_all();
+                if (mTimeoutThread->get_id() != std::this_thread::get_id())
+                {
+                    timeoutThread = std::move(mTimeoutThread);
+                }
             }
         }
 

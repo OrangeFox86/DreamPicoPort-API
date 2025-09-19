@@ -386,6 +386,24 @@ FindResult find_dpp_device(
     };
 }
 
+//! The magic sequence which starts each packet
+static constexpr const std::uint8_t kMagicSequence[] = {0xDB, 0x8B, 0xAF, 0xD5};
+//! The number of bytes in the magic sequence
+static constexpr const std::int8_t kSizeMagic = sizeof(kMagicSequence);
+//! The number of packet size bytes (2 for size and 2 for inverse size)
+static constexpr const std::int8_t kSizeSize = 4;
+//! Minimum number of bytes used for return address in packet
+static constexpr const std::int8_t kMinSizeAddress = 1;
+//! Maximum number of bytes used for return address in packet
+static constexpr const std::int8_t kMaxSizeAddress = 9;
+//! The number of bytes used for command in packet
+static constexpr const std::int8_t kSizeCommand = 1;
+//! The number of bytes used for CRC at the end of the packet
+static constexpr const std::int8_t kSizeCrc = 2;
+//! Minimum number of bytes of a packet
+static constexpr const std::int8_t kMinPacketSize =
+    kSizeMagic + kSizeSize + kMinSizeAddress + kSizeCommand + kSizeCrc;
+
 //! Implementation class for DppDevice
 class DppDeviceImp
 {
@@ -712,128 +730,6 @@ public:
         return computeCrc16(0xFFFFU, buffer, bufLen);
     }
 
-    //! Process data from mReceiveBuffer into packets
-    void processPackets()
-    {
-        while (mReceiveBuffer.size() >= kMinPacketSize)
-        {
-            std::size_t magicStart = 0;
-            std::size_t magicSize = 0;
-            std::size_t idx = 0;
-            std::size_t magicIdx = 0;
-            while (idx < mReceiveBuffer.size() && magicSize < kSizeMagic)
-            {
-                if (kMagicSequence[magicIdx] == mReceiveBuffer[idx])
-                {
-                    ++magicSize;
-                    ++magicIdx;
-                }
-                else
-                {
-                    magicStart = idx + 1;
-                    magicSize = 0;
-                    magicIdx = 0;
-                }
-
-                ++idx;
-            }
-
-            if (magicStart > 0)
-            {
-                // Remove non-magic bytes
-                mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + magicStart);
-                if (mReceiveBuffer.size() < kMinPacketSize)
-                {
-                    // Not large enough for a full packet
-                    return;
-                }
-            }
-
-            std::uint16_t size = bytesToUint16(&mReceiveBuffer[kSizeMagic]);
-            std::uint16_t sizeInv = bytesToUint16(&mReceiveBuffer[kSizeMagic + 2]);
-            if ((size ^ sizeInv) != 0xFFFF || size < (kMinSizeAddress + kSizeCrc))
-            {
-                // Invalid size inverse, discard first byte and retry
-                mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + 1);
-                continue;
-            }
-
-            // Check if full payload is available
-            if (mReceiveBuffer.size() < (kSizeMagic + kSizeSize + size))
-            {
-                // Wait for more data
-                return;
-            }
-
-            // Check CRC
-            std::size_t pktSize = kSizeMagic + kSizeSize + size;
-            const std::uint16_t receivedCrc = bytesToUint16(&mReceiveBuffer[pktSize - kSizeCrc]);
-            const std::uint16_t computedCrc =
-                computeCrc16(&mReceiveBuffer[kSizeMagic + kSizeSize], size - kSizeCrc);
-
-            if (receivedCrc != computedCrc)
-            {
-                // Invalid CRC, discard first byte and retry
-                mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + 1);
-                continue;
-            }
-
-            // Extract address (variable-length, 7 bits per byte, MSb=1 if more bytes follow)
-            std::uint64_t addr = 0;
-            std::int8_t addrLen = 0;
-            bool lastByteBreak = false;
-            std::size_t maxAddrSize = mReceiveBuffer.size() - kSizeMagic - kSizeSize - kSizeCrc;
-            if (maxAddrSize > static_cast<std::size_t>(kMaxSizeAddress))
-            {
-                maxAddrSize = static_cast<std::size_t>(kMaxSizeAddress);
-            }
-            for (
-                std::int8_t i = 0;
-                static_cast<std::size_t>(i) < maxAddrSize;
-                ++i
-            ) {
-              const std::uint8_t mask = (i < (kMaxSizeAddress - 1)) ? 0x7f : 0xff;
-              const std::uint8_t thisByte = mReceiveBuffer[kSizeMagic + kSizeSize + i];
-              addr |= (thisByte & mask) << (7 * i);
-              ++addrLen;
-              if ((thisByte & 0x80) == 0)
-              {
-                lastByteBreak = true;
-                break;
-              }
-            }
-            if (mReceiveBuffer.size() <= (kSizeMagic + kSizeSize + addrLen + kSizeCrc))
-            {
-                // Missing command byte, discard first byte and retry
-                mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + 1);
-                continue;
-            }
-
-            // Extract command
-            const std::uint8_t cmd = mReceiveBuffer[kSizeMagic + kSizeSize + addrLen];
-
-            // Extract payload
-            const std::size_t beginIdx = kSizeMagic + kSizeSize + addrLen + kSizeCommand;
-            const std::size_t endIdx = kSizeMagic + kSizeSize + size - kSizeCrc;
-            std::vector<std::uint8_t> payload(
-                mReceiveBuffer.begin() + beginIdx,
-                mReceiveBuffer.begin() + endIdx
-            );
-
-            // Erase this packet from data
-            mReceiveBuffer.erase(
-                mReceiveBuffer.begin(),
-                mReceiveBuffer.begin() + kSizeMagic + kSizeSize + size
-            );
-
-            // Process the data
-            if (mRxFn)
-            {
-                mRxFn(addr, cmd, payload);
-            }
-        }
-    }
-
     //! Forward declaration of transfer complete callback
     //! @param[in] transfer The transfer which completed
     static void LIBUSB_CALL onLibusbTransferComplete(libusb_transfer *transfer)
@@ -842,15 +738,73 @@ public:
         dppDeviceImp->transferComplete(transfer);
     }
 
+    // //! Consumes what is in the receive buffer into the end out the given buffer
+    // //! @param[out] outputBuffer The buffer to append into
+    // void consumeRceiveBuffer(std::vector<std::uint8_t>& outputBuffer)
+    // {
+    //     std::lock_guard<std::mutex> lock(mReceiveBufferMutex);
+    //     if (outputBuffer.empty())
+    //     {
+    //         outputBuffer = std::move(mReceiveBuffer);
+    //     }
+    //     else
+    //     {
+    //         outputBuffer.insert(outputBuffer.end(), mReceiveBuffer.begin(), mReceiveBuffer.end());
+    //     }
+    //     mReceiveBuffer.clear();
+    // }
+
+    // //! Wait until expiration, data received, or given predicate returns true
+    // //! @param[in] expiration Deadline to wait for
+    // //! @param[in] pred External predicate
+    // //! @return true if data is available or pred returns true
+    // //! @return false on timeout
+    // bool waitUntilData(std::chrono::system_clock::time_point expiration, const std::function<bool()>& pred)
+    // {
+    //     std::unique_lock<std::mutex> lock(mReceiveBufferMutex);
+    //     if (pred)
+    //     {
+    //         return mReceiveBufferCv.wait_until(
+    //             lock,
+    //             expiration,
+    //             [this, pred](){return !mReceiveBuffer.empty() || pred();}
+    //         );
+    //     }
+    //     else
+    //     {
+    //         return mReceiveBufferCv.wait_until(lock, expiration, [this](){return !mReceiveBuffer.empty();});
+    //     }
+    // }
+
+    // //! Wait until data received or predicate returns true
+    // //! @param[in] pred External predicate
+    // void waitData(const std::function<bool()>& pred)
+    // {
+    //     std::unique_lock<std::mutex> lock(mReceiveBufferMutex);
+    //     if (pred)
+    //     {
+    //         return mReceiveBufferCv.wait(lock, [this, pred](){return !mReceiveBuffer.empty() || pred();});
+    //     }
+    //     else
+    //     {
+    //         return mReceiveBufferCv.wait(lock, [this](){return !mReceiveBuffer.empty();});
+    //     }
+    // }
+
+    // //! Notify any wait* calls to check their predicates
+    // void notifyWaitData()
+    // {
+    //     std::lock_guard<std::mutex> lock(mReceiveBufferMutex);
+    //     mReceiveBufferCv.notify_all();
+    // }
+
     //! Called when a libusb read transfer completed
     //! @param[in] transfer The transfer that completed
     void transferComplete(libusb_transfer* transfer)
     {
         if (transfer->status == LIBUSB_TRANSFER_COMPLETED && mRxFn && transfer->actual_length > 0)
         {
-            mReceiveBuffer.insert(mReceiveBuffer.end(), transfer->buffer, transfer->buffer + transfer->actual_length);
-            processPackets();
-
+            mRxFn(transfer->buffer, transfer->actual_length);
             transfer->actual_length = 0;
         }
 
@@ -1030,7 +984,7 @@ public:
     //! @param[in] completeFn The function to call on disconnect
     //! @return true if interface was open or opened and read thread was started
     bool beginRead(
-        const std::function<void(uint64_t, uint8_t, std::vector<std::uint8_t>&)>& rxFn,
+        const std::function<void(const std::uint8_t*, int)>& rxFn,
         const std::function<void(const std::string&)>& completeFn
     )
     {
@@ -1239,24 +1193,6 @@ public:
     }
 
 public:
-    //! The magic sequence which starts each packet
-    static constexpr const std::uint8_t kMagicSequence[] = {0xDB, 0x8B, 0xAF, 0xD5};
-    //! The number of bytes in the magic sequence
-    static constexpr const std::int8_t kSizeMagic = sizeof(kMagicSequence);
-    //! The number of packet size bytes (2 for size and 2 for inverse size)
-    static constexpr const std::int8_t kSizeSize = 4;
-    //! Minimum number of bytes used for return address in packet
-    static constexpr const std::int8_t kMinSizeAddress = 1;
-    //! Maximum number of bytes used for return address in packet
-    static constexpr const std::int8_t kMaxSizeAddress = 9;
-    //! The number of bytes used for command in packet
-    static constexpr const std::int8_t kSizeCommand = 1;
-    //! The number of bytes used for CRC at the end of the packet
-    static constexpr const std::int8_t kSizeCrc = 2;
-    //! Minimum number of bytes of a packet
-    static constexpr const std::int8_t kMinPacketSize =
-        kSizeMagic + kSizeSize + kMinSizeAddress + kSizeCommand + kSizeCrc;
-
     //! The serial number of this device
     const std::string mSerial;
 
@@ -1291,10 +1227,8 @@ private:
     std::unique_ptr<std::thread> mReadThread;
     //! Serializes access to mReadThread
     std::recursive_mutex mReadThreadMutex;
-    //! Holds the received data
-    std::vector<std::uint8_t> mReceiveBuffer;
     //! The function to call whenever a packet is received
-    std::function<void(uint64_t, uint8_t, std::vector<std::uint8_t>&)> mRxFn;
+    std::function<void(const std::uint8_t*, int)> mRxFn;
     //! The function to call when the read thread exits
     std::function<void(const std::string&)> mRxCompleteFn;
     //! Contains last libusb error data
@@ -1641,7 +1575,7 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
         }
     }
 
-    // To satisfy an edge case, ensure complete disconnection and join before trying to reconnect
+    // Because of the above checks, calling disconnect() here will ensure all threads are stopped and joined
     if (!disconnect())
     {
         return false;
@@ -1656,9 +1590,9 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
 
     if (
         !mImp->beginRead(
-            [this](std::uint64_t addr, std::uint8_t cmd, std::vector<std::uint8_t>& payload)
+            [this](const std::uint8_t* buffer, int len)
             {
-                handleReceive(addr, cmd, payload);
+                handleReceive(buffer, len);
             },
             [this, fn](const std::string& errStr)
             {
@@ -1681,19 +1615,27 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
         {
             while (true)
             {
-                std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> fns;
+                std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> timeoutFns;
+                std::list<std::function<void(std::uint8_t cmd, std::vector<std::uint8_t>& payload)>> respFns;
+                std::list<DppPacket> receivedPackets;
 
                 {
                     std::unique_lock<std::mutex> lock(mTimeoutMutex);
 
+                    bool waitResult = true;
+
                     if (mTimeoutLookup.empty())
                     {
-                        mTimeoutCv.wait(lock, [this](){return !isConnected();});
+                        mTimeoutCv.wait(lock, [this](){return !isConnected() || !mReceivedPackets.empty();});
                     }
                     else
                     {
                         std::chrono::system_clock::time_point nextTimePoint = mTimeoutLookup.begin()->first;
-                        mTimeoutCv.wait_until(lock, nextTimePoint, [this](){return !isConnected();});
+                        waitResult = mTimeoutCv.wait_until(
+                            lock,
+                            nextTimePoint,
+                            [this](){return !isConnected() || !mReceivedPackets.empty();}
+                        );
                     }
 
                     if (!isConnected())
@@ -1701,6 +1643,31 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
                         return;
                     }
 
+                    // We are currently connected, so if wait result is true, then there are received packets to process
+                    if (waitResult)
+                    {
+                        // Accumulate received packets and response functions
+                        receivedPackets = std::move(mReceivedPackets);
+                        mReceivedPackets.clear();
+                        for (auto iter = receivedPackets.begin(); iter != receivedPackets.end();)
+                        {
+                            FunctionLookupMap::iterator fnIter = mFnLookup.find(iter->addr);
+                            if (fnIter != mFnLookup.end())
+                            {
+                                respFns.push_back(std::move(fnIter->second.callback));
+                                mTimeoutLookup.erase(fnIter->second.timeoutMapIter);
+                                mFnLookup.erase(fnIter);
+                                ++iter;
+                            }
+                            else
+                            {
+                                // Nothing around to process this packet (must have timed out)
+                                iter = receivedPackets.erase(iter);
+                            }
+                        }
+                    }
+
+                    // Accumulate timeout functions
                     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
 
                     for (auto iter = mTimeoutLookup.begin(); iter != mTimeoutLookup.end();)
@@ -1713,7 +1680,7 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
                         FunctionLookupMap::iterator fnLookupIter = mFnLookup.find(iter->second);
                         if (fnLookupIter != mFnLookup.end())
                         {
-                            fns.push_back(std::move(fnLookupIter->second.callback));
+                            timeoutFns.push_back(std::move(fnLookupIter->second.callback));
                             mFnLookup.erase(fnLookupIter);
                         }
 
@@ -1721,25 +1688,43 @@ bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn
                     }
                 }
 
-                for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : fns)
+                // Execute for response
+                auto respFnIter = respFns.begin();
+                auto pktIter = receivedPackets.begin();
+                for (; respFnIter != respFns.end() && pktIter != receivedPackets.end(); ++respFnIter, ++pktIter)
+                {
+                    if (*respFnIter)
+                    {
+                        (*respFnIter)(pktIter->cmd, pktIter->payload);
+                    }
+                }
+
+                // Execute for timeout
+                for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : timeoutFns)
                 {
                     fn(::dpp_api::msg::rx::Msg::kCmdTimeout, {});
                 }
             }
 
-
-            std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> fns;
+            // Accumulate all hanging functions
+            std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> disconnectFns;
 
             {
                 std::unique_lock<std::mutex> lock(mTimeoutMutex);
 
                 for (FunctionLookupMap::reference entry : mFnLookup)
                 {
-                    fns.push_back(std::move(entry.second.callback));
+                    disconnectFns.push_back(std::move(entry.second.callback));
                 }
 
                 mFnLookup.clear();
                 mTimeoutLookup.clear();
+            }
+
+            // Execute for disconnect
+            for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : disconnectFns)
+            {
+                fn(::dpp_api::msg::rx::Msg::kCmdDisconnect, {});
             }
         }
     );
@@ -1792,27 +1777,6 @@ bool DppDevice::disconnect()
     }
 
     return closed;
-}
-
-void DppDevice::handleReceive(std::uint64_t addr, std::uint8_t cmd, std::vector<std::uint8_t>& payload)
-{
-    std::function<void(std::uint8_t cmd, std::vector<std::uint8_t>& payload)> respFn;
-
-    {
-        std::lock_guard<std::recursive_mutex> lock(mMutex);
-        FunctionLookupMap::iterator iter = mFnLookup.find(addr);
-        if (iter != mFnLookup.end())
-        {
-            respFn = std::move(iter->second.callback);
-            mTimeoutLookup.erase(iter->second.timeoutMapIter);
-            mFnLookup.erase(iter);
-        }
-    }
-
-    if (respFn)
-    {
-        respFn(cmd, payload);
-    }
 }
 
 std::uint64_t DppDevice::send(
@@ -1884,6 +1848,131 @@ std::uint8_t DppDevice::getEpIn()
 std::uint8_t DppDevice::getEpOut()
 {
     return mImp->getEpOut();
+}
+
+void DppDevice::handleReceive(const std::uint8_t* buffer, int len)
+{
+    mReceiveBuffer.insert(mReceiveBuffer.end(), buffer, buffer + len);
+    while (mReceiveBuffer.size() >= kMinPacketSize)
+    {
+        std::size_t magicStart = 0;
+        std::size_t magicSize = 0;
+        std::size_t idx = 0;
+        std::size_t magicIdx = 0;
+        while (idx < mReceiveBuffer.size() && magicSize < kSizeMagic)
+        {
+            if (kMagicSequence[magicIdx] == mReceiveBuffer[idx])
+            {
+                ++magicSize;
+                ++magicIdx;
+            }
+            else
+            {
+                magicStart = idx + 1;
+                magicSize = 0;
+                magicIdx = 0;
+            }
+
+            ++idx;
+        }
+
+        if (magicStart > 0)
+        {
+            // Remove non-magic bytes
+            mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + magicStart);
+            if (mReceiveBuffer.size() < kMinPacketSize)
+            {
+                // Not large enough for a full packet
+                return;
+            }
+        }
+
+        std::uint16_t size = DppDeviceImp::bytesToUint16(&mReceiveBuffer[kSizeMagic]);
+        std::uint16_t sizeInv = DppDeviceImp::bytesToUint16(&mReceiveBuffer[kSizeMagic + 2]);
+        if ((size ^ sizeInv) != 0xFFFF || size < (kMinSizeAddress + kSizeCrc))
+        {
+            // Invalid size inverse, discard first byte and retry
+            mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + 1);
+            continue;
+        }
+
+        // Check if full payload is available
+        if (mReceiveBuffer.size() < (kSizeMagic + kSizeSize + size))
+        {
+            // Wait for more data
+            return;
+        }
+
+        // Check CRC
+        std::size_t pktSize = kSizeMagic + kSizeSize + size;
+        const std::uint16_t receivedCrc = DppDeviceImp::bytesToUint16(&mReceiveBuffer[pktSize - kSizeCrc]);
+        const std::uint16_t computedCrc =
+            DppDeviceImp::computeCrc16(&mReceiveBuffer[kSizeMagic + kSizeSize], size - kSizeCrc);
+
+        if (receivedCrc != computedCrc)
+        {
+            // Invalid CRC, discard first byte and retry
+            mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + 1);
+            continue;
+        }
+
+        // Ready to fill the packet
+        DppPacket packet;
+
+        // Extract address (variable-length, 7 bits per byte, MSb=1 if more bytes follow)
+        std::int8_t addrLen = 0;
+        bool lastByteBreak = false;
+        std::size_t maxAddrSize = mReceiveBuffer.size() - kSizeMagic - kSizeSize - kSizeCrc;
+        if (maxAddrSize > static_cast<std::size_t>(kMaxSizeAddress))
+        {
+            maxAddrSize = static_cast<std::size_t>(kMaxSizeAddress);
+        }
+        for (
+            std::int8_t i = 0;
+            static_cast<std::size_t>(i) < maxAddrSize;
+            ++i
+        ) {
+            const std::uint8_t mask = (i < (kMaxSizeAddress - 1)) ? 0x7f : 0xff;
+            const std::uint8_t thisByte = mReceiveBuffer[kSizeMagic + kSizeSize + i];
+            packet.addr |= (thisByte & mask) << (7 * i);
+            ++addrLen;
+            if ((thisByte & 0x80) == 0)
+            {
+                lastByteBreak = true;
+                break;
+            }
+        }
+        if (mReceiveBuffer.size() <= (kSizeMagic + kSizeSize + addrLen + kSizeCrc))
+        {
+            // Missing command byte, discard first byte and retry
+            mReceiveBuffer.erase(mReceiveBuffer.begin(), mReceiveBuffer.begin() + 1);
+            continue;
+        }
+
+        // Extract command
+        packet.cmd = mReceiveBuffer[kSizeMagic + kSizeSize + addrLen];
+
+        // Extract payload
+        const std::size_t beginIdx = kSizeMagic + kSizeSize + addrLen + kSizeCommand;
+        const std::size_t endIdx = kSizeMagic + kSizeSize + size - kSizeCrc;
+        packet.payload.assign(
+            mReceiveBuffer.begin() + beginIdx,
+            mReceiveBuffer.begin() + endIdx
+        );
+
+        // Erase this packet from data
+        mReceiveBuffer.erase(
+            mReceiveBuffer.begin(),
+            mReceiveBuffer.begin() + kSizeMagic + kSizeSize + size
+        );
+
+        // Process the data
+        {
+            std::unique_lock<std::mutex> lock(mTimeoutMutex);
+            mReceivedPackets.push_back(std::move(packet));
+            mTimeoutCv.notify_all();
+        }
+    }
 }
 
 } // namespace dpp_api

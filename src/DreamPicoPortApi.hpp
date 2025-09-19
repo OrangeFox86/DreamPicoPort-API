@@ -537,10 +537,9 @@ public:
 
 private:
     //! Handle received data
-    //! @param[in] addr The return address of the received data
-    //! @param[in] cmd The command of the received data
-    //! @param[in] payload The payload of the received data
-    void handleReceive(std::uint64_t addr, std::uint8_t cmd, std::vector<std::uint8_t>& payload);
+    //! @param[in] buffer Buffer received from libusb
+    //! @param[in] len Number of bytes in buffer received
+    void handleReceive(const std::uint8_t* buffer, int len);
 
 private:
     //! Forward declared pointer to internal implementation class
@@ -580,6 +579,15 @@ private:
     std::mutex mTimeoutMutex;
     //! Mutex used to serialize access to class data
     std::recursive_mutex mMutex;
+    std::vector<std::uint8_t> mReceiveBuffer;
+
+    struct DppPacket
+    {
+        std::uint64_t addr = 0;
+        std::uint8_t cmd = 0;
+        std::vector<std::uint8_t> payload;
+    };
+    std::list<DppPacket> mReceivedPackets;
 };
 
 }

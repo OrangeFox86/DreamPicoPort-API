@@ -738,66 +738,6 @@ public:
         dppDeviceImp->transferComplete(transfer);
     }
 
-    // //! Consumes what is in the receive buffer into the end out the given buffer
-    // //! @param[out] outputBuffer The buffer to append into
-    // void consumeRceiveBuffer(std::vector<std::uint8_t>& outputBuffer)
-    // {
-    //     std::lock_guard<std::mutex> lock(mReceiveBufferMutex);
-    //     if (outputBuffer.empty())
-    //     {
-    //         outputBuffer = std::move(mReceiveBuffer);
-    //     }
-    //     else
-    //     {
-    //         outputBuffer.insert(outputBuffer.end(), mReceiveBuffer.begin(), mReceiveBuffer.end());
-    //     }
-    //     mReceiveBuffer.clear();
-    // }
-
-    // //! Wait until expiration, data received, or given predicate returns true
-    // //! @param[in] expiration Deadline to wait for
-    // //! @param[in] pred External predicate
-    // //! @return true if data is available or pred returns true
-    // //! @return false on timeout
-    // bool waitUntilData(std::chrono::system_clock::time_point expiration, const std::function<bool()>& pred)
-    // {
-    //     std::unique_lock<std::mutex> lock(mReceiveBufferMutex);
-    //     if (pred)
-    //     {
-    //         return mReceiveBufferCv.wait_until(
-    //             lock,
-    //             expiration,
-    //             [this, pred](){return !mReceiveBuffer.empty() || pred();}
-    //         );
-    //     }
-    //     else
-    //     {
-    //         return mReceiveBufferCv.wait_until(lock, expiration, [this](){return !mReceiveBuffer.empty();});
-    //     }
-    // }
-
-    // //! Wait until data received or predicate returns true
-    // //! @param[in] pred External predicate
-    // void waitData(const std::function<bool()>& pred)
-    // {
-    //     std::unique_lock<std::mutex> lock(mReceiveBufferMutex);
-    //     if (pred)
-    //     {
-    //         return mReceiveBufferCv.wait(lock, [this, pred](){return !mReceiveBuffer.empty() || pred();});
-    //     }
-    //     else
-    //     {
-    //         return mReceiveBufferCv.wait(lock, [this](){return !mReceiveBuffer.empty();});
-    //     }
-    // }
-
-    // //! Notify any wait* calls to check their predicates
-    // void notifyWaitData()
-    // {
-    //     std::lock_guard<std::mutex> lock(mReceiveBufferMutex);
-    //     mReceiveBufferCv.notify_all();
-    // }
-
     //! Called when a libusb read transfer completed
     //! @param[in] transfer The transfer that completed
     void transferComplete(libusb_transfer* transfer)

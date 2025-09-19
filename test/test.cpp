@@ -316,11 +316,87 @@ bool parse_send_id(std::uint64_t id, std::uint32_t& numExpected)
     return true;
 }
 
+
+
+void read_response(std::shared_ptr<dpp_api::DppDevice> dppDevice, dpp_api::msg::rx::Maple& msg)
+{
+    // printf("RESPONSE\n");
+    static uint8_t currentAddr[4] = {};
+    static uint32_t errCnt[4] = {};
+    bool send = false;
+    uint8_t playerIdx = 0;
+
+    if (!dppDevice->isConnected())
+    {
+        printf("Read failed due to disconnect\n");
+        update_response_count();
+    }
+    else if (msg.cmd == 0x0a && msg.packet.size() >= 4)
+    {
+        playerIdx = msg.packet[2] >> 6;
+
+        if (msg.packet.size() >= 524 && msg.packet[0] == 0x08 && msg.packet[11] == currentAddr[playerIdx])
+        {
+            // for (std::uint8_t b : msg.packet)
+            // {
+            //     printf("%02hhx ", b);
+            // }
+            // printf("\n");
+
+            if (currentAddr[playerIdx] == 0xFF)
+            {
+                printf("Player %i read complete\n", playerIdx + 1);
+                update_response_count();
+            }
+            else
+            {
+                ++currentAddr[playerIdx];
+                errCnt[playerIdx] = 0;
+                send = true;
+            }
+        }
+        else if (++errCnt[playerIdx] >= 4)
+        {
+            printf("Player %i read failed at addr %02hhx\n", playerIdx + 1, currentAddr[playerIdx]);
+            update_response_count();
+        }
+        else
+        {
+            send = true;
+        }
+    }
+    else
+    {
+        printf("Read failed due to invalid response\n");
+        update_response_count();
+    }
+
+    if (send)
+    {
+        dpp_api::DppDevice* dppDevicePtr = dppDevice.get();
+        uint64_t sent = dppDevicePtr->send(
+            dpp_api::msg::tx::Maple{
+                {0x0B, msg.packet[2], msg.packet[1], 2, 0, 0, 0, 2, 0, 0, 0, currentAddr[playerIdx]}
+            },
+            [dppDevice = std::move(dppDevice)](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
+            500
+        );
+        if (sent == 0)
+        {
+            printf("Send failure: %s\n", dppDevicePtr->getLastErrorStr().c_str());
+        }
+        // else
+        // {
+        //     printf("Sent address: %llu\n", static_cast<long long unsigned>(sent));
+        // }
+    }
+}
+
 bool wait_async_complete(std::uint32_t numExpected)
 {
     std::unique_lock<std::mutex> lock(mainMutex);
     std::uint32_t* c = &respCount;
-    mainCv.wait_for(lock, std::chrono::milliseconds(1000), [c, numExpected](){return *c >= numExpected;});
+    mainCv.wait_for(lock, std::chrono::milliseconds(5000), [c, numExpected](){return *c >= numExpected;});
     return (respCount >= numExpected);
 }
 
@@ -329,7 +405,7 @@ int main(int argc, char **argv)
     list_all_devices();
     dpp_api::DppDevice::Filter filter;
     filter.minBcdDevice = 0x0120;
-    std::unique_ptr<dpp_api::DppDevice> dppDevice = dpp_api::DppDevice::find(filter);
+    std::shared_ptr<dpp_api::DppDevice> dppDevice = dpp_api::DppDevice::find(filter);
 
     if (dppDevice)
     {
@@ -427,8 +503,60 @@ int main(int argc, char **argv)
             return 2;
         }
 
+
+        // Test result: can read 1 VMU in 2.2 seconds and 4 VMUs in parallel in 2.6 seconds \o/
+        // auto start = std::chrono::high_resolution_clock::now();
+
+        // sent = dppDevice->send(
+        //     dpp_api::msg::tx::Maple{{0x0B, 0x01, 0x00, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
+        //     [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
+        //     500
+        // );
+
+        // if (!parse_send_id(sent, numExpected))
+        // {
+        //     return 2;
+        // }
+
+        // sent = dppDevice->send(
+        //     dpp_api::msg::tx::Maple{{0x0B, 0x41, 0x40, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
+        //     [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
+        //     500
+        // );
+
+        // if (!parse_send_id(sent, numExpected))
+        // {
+        //     return 2;
+        // }
+
+        // sent = dppDevice->send(
+        //     dpp_api::msg::tx::Maple{{0x0B, 0x81, 0x80, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
+        //     [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
+        //     500
+        // );
+
+        // if (!parse_send_id(sent, numExpected))
+        // {
+        //     return 2;
+        // }
+
+        // sent = dppDevice->send(
+        //     dpp_api::msg::tx::Maple{{0x0B, 0xC1, 0xC0, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
+        //     [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
+        //     500
+        // );
+
+        // if (!parse_send_id(sent, numExpected))
+        // {
+        //     return 2;
+        // }
+
         // Wait until all asynchronous commands fully process
         wait_async_complete(numExpected);
+
+        // auto end = std::chrono::high_resolution_clock::now();
+        // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        // printf("Time elapsed: %lld ms\n", static_cast<long long>(duration.count()));
 
         // Test a synchronous command
         dpp_api::msg::rx::GetControllerState st = dppDevice->send(dpp_api::msg::tx::GetControllerState{0}, 500);

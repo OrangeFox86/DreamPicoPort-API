@@ -225,7 +225,7 @@ public:
         else
         {
             // (never lock mConnectionMutex while mProcessThreadMutex is locked)
-            std::lock_guard<std::mutex> lock(mProcessThreadMutex);
+            std::lock_guard<std::mutex> lock(mProcessMutex);
             if (mProcessThread && mProcessThread->get_id() == std::this_thread::get_id())
             {
                 setExternalError("connect attempted within timeout callback context");
@@ -233,13 +233,13 @@ public:
             }
         }
 
+        std::lock_guard<std::recursive_mutex> lock(mConnectionMutex);
+
         // Because of the above checks, calling disconnect() here will ensure all threads are stopped and joined
         if (!disconnect())
         {
             return false;
         }
-
-        std::lock_guard<std::recursive_mutex> lock(mConnectionMutex);
 
         if (!mLibusbDevice->openInterface())
         {
@@ -267,7 +267,9 @@ public:
             return false;
         }
 
-        std::lock_guard<std::mutex> timeoutThreadLock(mProcessThreadMutex);
+        std::lock_guard<std::mutex> timeoutThreadLock(mProcessMutex);
+
+        mProcessing = true;
 
         mProcessThread = std::make_unique<std::thread>(
             [this]()
@@ -286,45 +288,47 @@ public:
     //! @return true if disconnection succeeded or was already disconnected
     bool disconnect()
     {
-        bool closed = false;
-        std::unique_ptr<std::thread> readThread;
-        std::unique_ptr<std::thread> timeoutThread;
-
+        // This function may not be called from any callback context (would cause deadlock)
+        if (mLibusbDevice->isThisThreadReading())
         {
-            std::lock_guard<std::recursive_mutex> lock(mConnectionMutex);
-
-            mConnected = false;
-
+            // Signal disconnection so that processing thread begins to join now
+            signalDisconnect();
+            return false;
+        }
+        else
+        {
+            // (never lock mConnectionMutex while mProcessThreadMutex is locked)
+            std::lock_guard<std::mutex> lock(mProcessMutex);
+            if (mProcessThread && mProcessThread->get_id() == std::this_thread::get_id())
             {
-                std::lock_guard<std::mutex> lock(mProcessThreadMutex);
-                if (mProcessThread)
-                {
-                    std::lock_guard<std::mutex> lock(mProcessMutex);
-                    mProcessCv.notify_all();
-                    if (mProcessThread->get_id() != std::this_thread::get_id())
-                    {
-                        timeoutThread = std::move(mProcessThread);
-                    }
-                }
+                // Signal disconnection so that processing thread begins to join now
+                signalDisconnect();
+                return false;
             }
-
-            readThread = mLibusbDevice->consumeReadThread();
-
-            // Calling this may cause a call to disconnect() from the read thread
-            closed = mLibusbDevice->closeInterface();
         }
 
-        // Join threads outside of mutex scope
+        std::lock_guard<std::recursive_mutex> lock(mConnectionMutex);
 
-        if (readThread)
+        mConnected = false;
+
+        // Calling this may cause a call to disconnect() from the read thread
+        bool closed = mLibusbDevice->closeInterface();
+
+        std::unique_ptr<std::thread> processThread;
+
         {
-            readThread->join();
+            std::lock_guard<std::mutex> lock(mProcessMutex);
+            mProcessing = false;
+            mProcessCv.notify_all();
+            processThread = std::move(mProcessThread);
         }
 
-        if (timeoutThread)
+        if (processThread)
         {
-            timeoutThread->join();
+            processThread->join();
         }
+
+        mLibusbDevice->joinRead();
 
         return closed;
     }
@@ -452,6 +456,14 @@ public:
     }
 
 private:
+    //! Signals disconnect without joining
+    void signalDisconnect()
+    {
+        std::lock_guard<std::mutex> lock(mProcessMutex);
+        mProcessing = false;
+        mProcessCv.notify_all();
+    }
+
     //! Handle received data
     //! @param[in] buffer Buffer received from libusb
     //! @param[in] len Number of bytes in buffer received
@@ -521,8 +533,10 @@ private:
                 continue;
             }
 
+            // Ready to fill the packet
+            IncomingData packet;
+
             // Extract address (variable-length, 7 bits per byte, MSb=1 if more bytes follow)
-            std::uint64_t addr = 0;
             std::int8_t addrLen = 0;
             bool lastByteBreak = false;
             std::size_t maxAddrSize = mReceiveBuffer.size() - kSizeMagic - kSizeSize - kSizeCrc;
@@ -537,7 +551,7 @@ private:
             ) {
                 const std::uint8_t mask = (i < (kMaxSizeAddress - 1)) ? 0x7f : 0xff;
                 const std::uint8_t thisByte = mReceiveBuffer[kSizeMagic + kSizeSize + i];
-                addr |= (thisByte & mask) << (7 * i);
+                packet.addr |= (thisByte & mask) << (7 * i);
                 ++addrLen;
                 if ((thisByte & 0x80) == 0)
                 {
@@ -553,12 +567,12 @@ private:
             }
 
             // Extract command
-            const std::uint8_t cmd = mReceiveBuffer[kSizeMagic + kSizeSize + addrLen];
+            packet.cmd = mReceiveBuffer[kSizeMagic + kSizeSize + addrLen];
 
             // Extract payload
             const std::size_t beginIdx = kSizeMagic + kSizeSize + addrLen + kSizeCommand;
             const std::size_t endIdx = kSizeMagic + kSizeSize + size - kSizeCrc;
-            std::vector<std::uint8_t> payload(
+            packet.payload.assign(
                 mReceiveBuffer.begin() + beginIdx,
                 mReceiveBuffer.begin() + endIdx
             );
@@ -569,32 +583,25 @@ private:
                 mReceiveBuffer.begin() + kSizeMagic + kSizeSize + size
             );
 
-            std::function<void(std::uint8_t cmd, std::vector<std::uint8_t>& payload)> respFn;
-
+            // Process the data
             {
-                std::lock_guard<std::mutex> lock(mProcessMutex);
-                FunctionLookupMap::iterator iter = mFnLookup.find(addr);
-                if (iter != mFnLookup.end())
-                {
-                    respFn = std::move(iter->second.callback);
-                    mTimeoutLookup.erase(iter->second.timeoutMapIter);
-                    mFnLookup.erase(iter);
-                }
-            }
-
-            if (respFn)
-            {
-                respFn(cmd, payload);
+                std::unique_lock<std::mutex> lock(mProcessMutex);
+                mIncomingPackets.push_back(std::move(packet));
+                mProcessCv.notify_all();
             }
         }
     }
 
+    //! The entrypoint for mProcessThread
+    //! All callbacks are executed from this context
     void processEntrypoint()
     {
         while (true)
         {
             std::list<OutgoingData> dataToSend;
             std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> timeoutFns;
+            std::list<std::function<void(std::uint8_t cmd, std::vector<std::uint8_t>& payload)>> respFns;
+            std::list<IncomingData> receivedPackets;
 
             {
                 std::unique_lock<std::mutex> lock(mProcessMutex);
@@ -607,7 +614,7 @@ private:
                         lock,
                         [this]()
                         {
-                            return !isConnected() || !mOutgoingData.empty();
+                            return !mProcessing || !mOutgoingData.empty() || !mIncomingPackets.empty();
                         }
                     );
                 }
@@ -619,19 +626,45 @@ private:
                         nextTimePoint,
                         [this]()
                         {
-                            return !isConnected() || !mOutgoingData.empty();
+                            return !mProcessing || !mOutgoingData.empty() || !mIncomingPackets.empty();
                         }
                     );
                 }
 
-                if (!isConnected())
+                if (!mProcessing)
                 {
                     break;
                 }
                 else if (waitResult)
                 {
-                    dataToSend = std::move(mOutgoingData);
-                    mOutgoingData.clear();
+                    if (!mOutgoingData.empty())
+                    {
+                        dataToSend = std::move(mOutgoingData);
+                        mOutgoingData.clear();
+                    }
+
+                    if (!mIncomingPackets.empty())
+                    {
+                        // Accumulate received packets and response functions
+                        receivedPackets = std::move(mIncomingPackets);
+                        mIncomingPackets.clear();
+                        for (auto iter = receivedPackets.begin(); iter != receivedPackets.end();)
+                        {
+                            FunctionLookupMap::iterator fnIter = mFnLookup.find(iter->addr);
+                            if (fnIter != mFnLookup.end())
+                            {
+                                respFns.push_back(std::move(fnIter->second.callback));
+                                mTimeoutLookup.erase(fnIter->second.timeoutMapIter);
+                                mFnLookup.erase(fnIter);
+                                ++iter;
+                            }
+                            else
+                            {
+                                // Nothing around to process this packet (must have timed out)
+                                iter = receivedPackets.erase(iter);
+                            }
+                        }
+                    }
                 }
                 else
                 {
@@ -693,6 +726,17 @@ private:
                 }
             }
 
+            // Execute for response
+            auto respFnIter = respFns.begin();
+            auto pktIter = receivedPackets.begin();
+            for (; respFnIter != respFns.end() && pktIter != receivedPackets.end(); ++respFnIter, ++pktIter)
+            {
+                if (*respFnIter)
+                {
+                    (*respFnIter)(pktIter->cmd, pktIter->payload);
+                }
+            }
+
             // Execute for timeout
             for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : timeoutFns)
             {
@@ -739,6 +783,8 @@ private:
 
     //! True when connected, false when disconnected
     bool mConnected = false;
+    //! True while processing thread should execute
+    bool mProcessing = false;
     //! Maps return address to FunctionLookupMapEntry
     FunctionLookupMap mFnLookup;
     //! This is used to organize chronologically the timeout values for each key in the above mFnLookup
@@ -755,10 +801,8 @@ private:
     std::uint64_t mNextAddr = kMinAddr;
     //! Mutex serializing access to mNextAddr
     std::mutex mNextAddrMutex;
-    //! Thread which executes send and response timeouts
+    //! Thread which executes send, receive callback execution, and response timeout callback execution
     std::unique_ptr<std::thread> mProcessThread;
-    //! Mutex which serializes access specifically to mProcessThread
-    std::mutex mProcessThreadMutex;
     //! Mutex used to serialize connect() and disconnect() calls
     std::recursive_mutex mConnectionMutex;
     //! Holds received bytes not yet parsed into a packet
@@ -768,13 +812,24 @@ private:
     struct OutgoingData
     {
         //! Address embedded in the packet
-        std::uint64_t addr;
+        std::uint64_t addr = 0;
         //! Packet to send
         std::vector<std::uint8_t> packet;
     };
 
     //! Holds data not yet sent
     std::list<OutgoingData> mOutgoingData;
+
+    //! Holds incoming parsed packet data
+    struct IncomingData
+    {
+        std::uint64_t addr = 0;
+        std::uint8_t cmd = 0;
+        std::vector<std::uint8_t> payload;
+    };
+
+    //! Holds data to be passed to processing callbacks
+    std::list<IncomingData> mIncomingPackets;
 };
 
 // (essentially, 4 byte max for address length at 7 bits of data per byte)

@@ -142,10 +142,12 @@ struct Msg
     static constexpr const std::int16_t kCmdFailure = 0x0F;
     //! The cmd response for invalid command or missing data
     static constexpr const std::int16_t kCmdInvalid = 0xFE;
+    //! The cmd response value set in the callback when send failure occurred
+    static constexpr const std::int16_t kCmdSendFailure = -1;
     //! The cmd response value set in the callback when timeout occurred before response received
-    static constexpr const std::int16_t kCmdTimeout = -1;
+    static constexpr const std::int16_t kCmdTimeout = -2;
     //! The cmd response value set in the callback when device disconnected before response received
-    static constexpr const std::int16_t kCmdDisconnect = -2;
+    static constexpr const std::int16_t kCmdDisconnect = -3;
 };
 
 struct Maple32 : Msg

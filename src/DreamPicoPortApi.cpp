@@ -143,17 +143,15 @@ class DppDeviceImp
 public:
     DppDeviceImp(std::unique_ptr<LibusbDevice>&& dev) : mLibusbDevice(std::move(dev)) {}
 
-    //! Sends data on the vendor interface
+    //! Packs a packet structure into a vector
     //! @param[in] addr The return address
     //! @param[in] cmd The command to set
     //! @param[in] payload The payload for the command
-    //! @param[in] timeoutMs Send timeout in milliseconds
-    //! @return true if data was successfully sent
-    bool send(
+    //! @return the packed data
+    static std::vector<std::uint8_t> pack(
         std::uint64_t addr,
         std::uint8_t cmd,
-        const std::vector<std::uint8_t>& payload,
-        unsigned int timeoutMs = 1000
+        const std::vector<std::uint8_t>& payload
     )
     {
         // Create address bytes
@@ -190,6 +188,23 @@ public:
         uint16ToBytes(crcBytes, crc);
         data.insert(data.end(), crcBytes, crcBytes + kSizeCrc);
 
+        return data;
+    }
+
+    //! Sends data on the vendor interface
+    //! @param[in] addr The return address
+    //! @param[in] cmd The command to set
+    //! @param[in] payload The payload for the command
+    //! @param[in] timeoutMs Send timeout in milliseconds
+    //! @return true if data was successfully sent
+    bool send(
+        std::uint64_t addr,
+        std::uint8_t cmd,
+        const std::vector<std::uint8_t>& payload,
+        unsigned int timeoutMs = 1000
+    )
+    {
+        std::vector<std::uint8_t> data = pack(addr, cmd, payload);
         return mLibusbDevice->send(&data[0], static_cast<int>(data.size()), timeoutMs);
     }
 
@@ -250,8 +265,12 @@ public:
         mTimeoutThread = std::make_unique<std::thread>(
             [this]()
             {
+                std::list<std::uint64_t> sendFailureAddresses;
+
                 while (true)
                 {
+                    std::map<std::uint64_t, std::vector<std::uint8_t>> dataToSend;
+                    std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> sendFailureFns;
                     std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> timeoutFns;
                     std::list<std::function<void(std::uint8_t cmd, std::vector<std::uint8_t>& payload)>> respFns;
                     std::list<DppPacket> receivedPackets;
@@ -263,7 +282,13 @@ public:
 
                         if (mTimeoutLookup.empty())
                         {
-                            mTimeoutCv.wait(lock, [this](){return !isConnected() || !mReceivedPackets.empty();});
+                            mTimeoutCv.wait(
+                                lock,
+                                [this]()
+                                {
+                                    return !isConnected() || !mOutgoingDataMap.empty() || !mIncomingPackets.empty();
+                                }
+                            );
                         }
                         else
                         {
@@ -271,7 +296,10 @@ public:
                             waitResult = mTimeoutCv.wait_until(
                                 lock,
                                 nextTimePoint,
-                                [this](){return !isConnected() || !mReceivedPackets.empty();}
+                                [this]()
+                                {
+                                    return !isConnected() || !mOutgoingDataMap.empty() || !mIncomingPackets.empty();
+                                }
                             );
                         }
 
@@ -280,12 +308,17 @@ public:
                             return;
                         }
 
-                        // We are currently connected, so if wait result is true, then there are received packets to process
-                        if (waitResult)
+                        if (!mOutgoingDataMap.empty())
+                        {
+                            dataToSend = std::move(mOutgoingDataMap);
+                            mOutgoingDataMap.clear();
+                        }
+
+                        if (!mIncomingPackets.empty())
                         {
                             // Accumulate received packets and response functions
-                            receivedPackets = std::move(mReceivedPackets);
-                            mReceivedPackets.clear();
+                            receivedPackets = std::move(mIncomingPackets);
+                            mIncomingPackets.clear();
                             for (auto iter = receivedPackets.begin(); iter != receivedPackets.end();)
                             {
                                 FunctionLookupMap::iterator fnIter = mFnLookup.find(iter->addr);
@@ -303,6 +336,19 @@ public:
                                 }
                             }
                         }
+
+                        for (const std::uint64_t& addr: sendFailureAddresses)
+                        {
+                            FunctionLookupMap::iterator fnIter = mFnLookup.find(addr);
+                            if (fnIter != mFnLookup.end())
+                            {
+                                sendFailureFns.push_back(std::move(fnIter->second.callback));
+                                mTimeoutLookup.erase(fnIter->second.timeoutMapIter);
+                                mFnLookup.erase(fnIter);
+                            }
+                        }
+
+                        sendFailureAddresses.clear();
 
                         // Accumulate timeout functions
                         std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
@@ -322,6 +368,21 @@ public:
                             }
 
                             iter = mTimeoutLookup.erase(iter);
+                        }
+                    }
+
+                    // Execute send failure functions
+                    for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : sendFailureFns)
+                    {
+                        fn(::dpp_api::msg::rx::Msg::kCmdSendFailure, {});
+                    }
+
+                    // Execute send
+                    for (std::pair<const std::uint64_t, std::vector<std::uint8_t>>& data : dataToSend)
+                    {
+                        if (!mLibusbDevice->send(&data.second[0], static_cast<int>(data.second.size())))
+                        {
+                            sendFailureAddresses.push_back(data.first);
                         }
                     }
 
@@ -444,25 +505,29 @@ public:
             {
                 mNextAddr = kMinAddr;
             }
-
-            if (respFn)
-            {
-                std::lock_guard<std::mutex> lock(mTimeoutMutex);
-
-                FunctionLookupMapEntry entry;
-                entry.callback = respFn;
-                entry.timeoutMapIter = mTimeoutLookup.insert(std::make_pair(
-                    std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs),
-                    addr
-                ));
-
-                mFnLookup[addr] = std::move(entry);
-
-                mTimeoutCv.notify_all();
-            }
         }
 
-        return (send(addr, cmd, payload, timeoutMs)) ? addr : 0;
+        std::vector<std::uint8_t> packedData = pack(addr, cmd, payload);
+
+        if (respFn)
+        {
+            std::lock_guard<std::mutex> lock(mTimeoutMutex);
+
+            FunctionLookupMapEntry entry;
+            entry.callback = respFn;
+            entry.timeoutMapIter = mTimeoutLookup.insert(std::make_pair(
+                std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs),
+                addr
+            ));
+
+            mFnLookup[addr] = std::move(entry);
+
+            mOutgoingDataMap[addr] = std::move(packedData);
+
+            mTimeoutCv.notify_all();
+        }
+
+        return addr;
     }
 
     static void setMaxAddr(std::uint64_t maxAddr)
@@ -641,7 +706,7 @@ private:
             // Process the data
             {
                 std::unique_lock<std::mutex> lock(mTimeoutMutex);
-                mReceivedPackets.push_back(std::move(packet));
+                mIncomingPackets.push_back(std::move(packet));
                 mTimeoutCv.notify_all();
             }
         }
@@ -686,13 +751,14 @@ private:
     std::recursive_mutex mMutex;
     std::vector<std::uint8_t> mReceiveBuffer;
 
+    std::map<std::uint64_t, std::vector<std::uint8_t>> mOutgoingDataMap;
     struct DppPacket
     {
         std::uint64_t addr = 0;
         std::uint8_t cmd = 0;
         std::vector<std::uint8_t> payload;
     };
-    std::list<DppPacket> mReceivedPackets;
+    std::list<DppPacket> mIncomingPackets;
 };
 
 // (essentially, 4 byte max for address length at 7 bits of data per byte)

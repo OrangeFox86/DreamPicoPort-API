@@ -374,16 +374,16 @@ public:
         {
             std::lock_guard<std::mutex> lock(mTimeoutMutex);
 
+            std::chrono::system_clock::time_point expiration =
+                std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs);
+
             FunctionLookupMapEntry entry;
             entry.callback = respFn;
-            entry.timeoutMapIter = mTimeoutLookup.insert(std::make_pair(
-                std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs),
-                addr
-            ));
+            entry.timeoutMapIter = mTimeoutLookup.insert(std::make_pair(expiration, addr));
 
             mFnLookup[addr] = std::move(entry);
 
-            mOutgoingData.push_back(std::make_pair(addr, std::move(packedData)));
+            mOutgoingData.push_back({addr, std::move(packedData)});
 
             mTimeoutCv.notify_all();
         }
@@ -593,7 +593,7 @@ private:
     {
         while (true)
         {
-            std::list<std::pair<std::uint64_t, std::vector<std::uint8_t>>> dataToSend;
+            std::list<OutgoingData> dataToSend;
             std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> timeoutFns;
 
             {
@@ -659,11 +659,11 @@ private:
 
             // Execute send
             std::list<std::uint64_t> sendFailureAddresses;
-            for (std::pair<std::uint64_t, std::vector<std::uint8_t>>& data : dataToSend)
+            for (OutgoingData& data : dataToSend)
             {
-                if (!mLibusbDevice->send(&data.second[0], static_cast<int>(data.second.size())))
+                if (!mLibusbDevice->send(&data.packet[0], static_cast<int>(data.packet.size())))
                 {
-                    sendFailureAddresses.push_back(data.first);
+                    sendFailureAddresses.push_back(data.addr);
                 }
             }
 
@@ -761,8 +761,18 @@ private:
     std::recursive_mutex mMutex;
     //! Holds received bytes not yet parsed into a packet
     std::vector<std::uint8_t> mReceiveBuffer;
-    //! Holds data not yet send
-    std::list<std::pair<std::uint64_t, std::vector<std::uint8_t>>> mOutgoingData;
+
+    //! Outgoing data structure
+    struct OutgoingData
+    {
+        //! Address embedded in the packet
+        std::uint64_t addr;
+        //! Packet to send
+        std::vector<std::uint8_t> packet;
+    };
+
+    //! Holds data not yet sent
+    std::list<OutgoingData> mOutgoingData;
 };
 
 // (essentially, 4 byte max for address length at 7 bits of data per byte)

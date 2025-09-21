@@ -40,16 +40,16 @@ void update_response_count()
     mainCv.notify_all();
 }
 
-void response(std::int16_t cmd, const std::vector<std::uint8_t>& payload)
+void response(dpp_api::msg::rx::Maple& msg)
 {
-    if (cmd < 0)
+    if (msg.cmd < 0)
     {
         printf("Response timeout\n");
     }
     else
     {
-        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(cmd));
-        for (std::uint8_t b : payload)
+        printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(msg.cmd));
+        for (std::uint8_t b : msg.packet)
         {
             printf("%02hhx ", b);
         }

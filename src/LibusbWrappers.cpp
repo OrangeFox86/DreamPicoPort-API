@@ -620,7 +620,7 @@ bool LibusbDevice::createTransfers()
             transferData->buffer.size(),
             LibusbDevice::onLibusbTransferComplete,
             this,
-            1000
+            0
         );
 
         {

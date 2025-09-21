@@ -287,8 +287,6 @@ public:
     //! @return true if disconnection succeeded or was already disconnected
     bool disconnect()
     {
-        bool inThreadContext = false;
-
         // Do not take mConnectionMutex while in thread context. Instead, simply stop processing without joining.
         {
             // (never lock mConnectionMutex while mProcessThreadMutex is locked)
@@ -318,13 +316,11 @@ public:
         if (mReadThread)
         {
             mReadThread->join();
-            mReadThread.reset();
         }
 
         if (mProcessThread)
         {
             mProcessThread->join();
-            mProcessThread.reset();
         }
 
         return closed;

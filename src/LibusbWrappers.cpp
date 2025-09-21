@@ -288,7 +288,6 @@ bool LibusbDevice::openInterface()
     if (mPreviouslyConnected || !mLibusbDeviceHandle)
     {
         // Reset and attempt to reconnect
-        cancelTransfers();
         mLibusbDeviceHandle.reset();
         mTransferDataMap.clear();
 
@@ -675,6 +674,7 @@ bool LibusbDevice::run(const std::function<void(const std::uint8_t*, int)>& rxFn
         }
     }
 
+    // It's necessary to continue to handle events until all transfers are completed
     cancelTransfers();
     while (!mTransferDataMap.empty())
     {

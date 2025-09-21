@@ -272,7 +272,6 @@ LibusbDevice::~LibusbDevice()
 
     // Reset libusb pointers in the correct order
     mLibusbDeviceHandle.reset();
-    mTransferDataMap.clear();
     mLibusbContext.reset();
 }
 
@@ -289,7 +288,6 @@ bool LibusbDevice::openInterface()
     {
         // Reset and attempt to reconnect
         mLibusbDeviceHandle.reset();
-        mTransferDataMap.clear();
 
         DppDevice::Filter filter;
         filter.idVendor = mDesc->idVendor;
@@ -406,7 +404,7 @@ bool LibusbDevice::openInterface()
 
 bool LibusbDevice::send(std::uint8_t* data, int length, unsigned int timeoutMs)
 {
-    if (!openInterface() || !mLibusbDeviceHandle)
+    if (!mLibusbDeviceHandle)
     {
         return false;
     }
@@ -519,7 +517,6 @@ void LibusbDevice::transferComplete(libusb_transfer* transfer)
     }
     else
     {
-        mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - device closing");
         allowNewTransfer = false;
     }
 
@@ -545,7 +542,7 @@ void LibusbDevice::transferComplete(libusb_transfer* transfer)
         std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
 
         // Erase the transfer from the map which should automatically free the transfer data
-        mTransferDataMap.erase(transfer);
+        std::size_t n = mTransferDataMap.erase(transfer);
 
         if (noDevice)
         {
@@ -601,7 +598,7 @@ bool LibusbDevice::createTransfers()
             transferData->buffer.size(),
             LibusbDevice::onLibusbTransferComplete,
             this,
-            0
+            1000
         );
 
         {
@@ -621,8 +618,16 @@ bool LibusbDevice::createTransfers()
 
     if (!success)
     {
-        std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
-        mTransferDataMap.clear();
+        // Need to process until transfers are fully canceled
+        cancelTransfers();
+        while (!mTransferDataMap.empty())
+        {
+            int r = libusb_handle_events(mLibusbContext.get());
+            if (r < 0)
+            {
+                break;
+            }
+        }
     }
 
     return success;

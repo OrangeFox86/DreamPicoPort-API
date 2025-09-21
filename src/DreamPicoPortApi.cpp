@@ -142,6 +142,10 @@ class DppDeviceImp
 {
 public:
     DppDeviceImp(std::unique_ptr<LibusbDevice>&& dev) : mLibusbDevice(std::move(dev)) {}
+    ~DppDeviceImp()
+    {
+        disconnect();
+    }
 
     //! Packs a packet structure into a vector
     //! @param[in] addr The return address
@@ -308,6 +312,11 @@ public:
 
         std::lock_guard<std::recursive_mutex> lock(mConnectionMutex);
 
+        if (!mConnected)
+        {
+            return true;
+        }
+
         mConnected = false;
 
         // Calling this may cause a call to disconnect() from the read thread
@@ -321,6 +330,13 @@ public:
         if (mProcessThread)
         {
             mProcessThread->join();
+        }
+
+        // Delete the threads
+        {
+            std::lock_guard<std::mutex> lock(mProcessMutex);
+            mReadThread.reset();
+            mProcessThread.reset();
         }
 
         return closed;
@@ -1108,9 +1124,7 @@ DppDevice::DppDevice(std::unique_ptr<DppDeviceImp>&& dev) : mImp(std::move(dev))
 {}
 
 DppDevice::~DppDevice()
-{
-    disconnect();
-}
+{}
 
 std::unique_ptr<DppDevice> DppDevice::find(const Filter& filter)
 {

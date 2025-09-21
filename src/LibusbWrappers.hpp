@@ -22,7 +22,10 @@ struct LibusbContextDeleter
 {
     inline void operator()(libusb_context* p) const
     {
-        libusb_exit(p);
+        if (p)
+        {
+            libusb_exit(p);
+        }
     }
 };
 
@@ -31,7 +34,10 @@ struct LibusbDeviceHandleDeleter
 {
     inline void operator()(libusb_device_handle* handle) const
     {
-        libusb_close(handle);
+        if (handle)
+        {
+            libusb_close(handle);
+        }
     }
 };
 
@@ -40,7 +46,10 @@ struct LibusbDeviceListDeleter
 {
     inline void operator()(libusb_device** devs) const
     {
-        libusb_free_device_list(devs, 1);
+        if (devs)
+        {
+            libusb_free_device_list(devs, 1);
+        }
     }
 };
 
@@ -49,7 +58,10 @@ struct LibusbConfigDescriptorDeleter
 {
     inline void operator()(libusb_config_descriptor* config) const
     {
-        libusb_free_config_descriptor(config);
+        if (config)
+        {
+            libusb_free_config_descriptor(config);
+        }
     }
 };
 
@@ -58,7 +70,10 @@ struct LibusbTransferDeleter
 {
     inline void operator()(libusb_transfer* transfer) const
     {
-        libusb_free_transfer(transfer);
+        if (transfer)
+        {
+            libusb_free_transfer(transfer);
+        }
     }
 };
 

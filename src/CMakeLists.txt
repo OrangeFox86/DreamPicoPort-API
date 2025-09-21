@@ -66,5 +66,5 @@ install(
         "${CMAKE_INSTALL_INCLUDEDIR}/dream_pico_port_api"
     COMPONENT Development
     FILES_MATCHING PATTERN
-        "*.h*"
+        "DreamPicoPortApi.hpp"
 )

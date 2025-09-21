@@ -208,6 +208,12 @@ public:
         return mLibusbDevice->send(&data[0], static_cast<int>(data.size()), timeoutMs);
     }
 
+    //! Connect to the device and start operation threads. If already connected, disconnect before reconnecting.
+    //! @param[in] fn When true is returned, this is the function that will execute when the device is disconnected
+    //!               errStr: the reason for disconnection or empty string if disconnect() was called
+    //!               NOTICE: Any attempt to call connect() within any callback function will always fail
+    //! @return false on failure and getLastErrorStr() will return error description
+    //! @return true if connection succeeded
     bool connect(const std::function<void(const std::string& errStr)>& fn)
     {
         // This function may not be called from any callback context (would cause deadlock)
@@ -240,20 +246,21 @@ public:
             return false;
         }
 
+        std::function<void(const std::string&)> completeFn;
+
+        if (fn)
+        {
+            completeFn = [this, fn](const std::string& errStr){ disconnect(); fn(errStr); };
+        }
+        else
+        {
+            completeFn = [this](const std::string& errStr){ disconnect(); };
+        }
+
         if (
             !mLibusbDevice->beginRead(
-                [this](const std::uint8_t* buffer, int len)
-                {
-                    handleReceive(buffer, len);
-                },
-                [this, fn](const std::string& errStr)
-                {
-                    disconnect();
-                    if (fn)
-                    {
-                        fn(errStr);
-                    }
-                }
+                [this](const std::uint8_t* buffer, int len){ handleReceive(buffer, len); },
+                completeFn
             )
         )
         {
@@ -265,165 +272,7 @@ public:
         mTimeoutThread = std::make_unique<std::thread>(
             [this]()
             {
-                std::list<std::uint64_t> sendFailureAddresses;
-
-                while (true)
-                {
-                    std::map<std::uint64_t, std::vector<std::uint8_t>> dataToSend;
-                    std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> sendFailureFns;
-                    std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> timeoutFns;
-                    std::list<std::function<void(std::uint8_t cmd, std::vector<std::uint8_t>& payload)>> respFns;
-                    std::list<DppPacket> receivedPackets;
-
-                    {
-                        std::unique_lock<std::mutex> lock(mTimeoutMutex);
-
-                        bool waitResult = true;
-
-                        if (mTimeoutLookup.empty())
-                        {
-                            mTimeoutCv.wait(
-                                lock,
-                                [this]()
-                                {
-                                    return !isConnected() || !mOutgoingDataMap.empty() || !mIncomingPackets.empty();
-                                }
-                            );
-                        }
-                        else
-                        {
-                            std::chrono::system_clock::time_point nextTimePoint = mTimeoutLookup.begin()->first;
-                            waitResult = mTimeoutCv.wait_until(
-                                lock,
-                                nextTimePoint,
-                                [this]()
-                                {
-                                    return !isConnected() || !mOutgoingDataMap.empty() || !mIncomingPackets.empty();
-                                }
-                            );
-                        }
-
-                        if (!isConnected())
-                        {
-                            return;
-                        }
-
-                        if (!mOutgoingDataMap.empty())
-                        {
-                            dataToSend = std::move(mOutgoingDataMap);
-                            mOutgoingDataMap.clear();
-                        }
-
-                        if (!mIncomingPackets.empty())
-                        {
-                            // Accumulate received packets and response functions
-                            receivedPackets = std::move(mIncomingPackets);
-                            mIncomingPackets.clear();
-                            for (auto iter = receivedPackets.begin(); iter != receivedPackets.end();)
-                            {
-                                FunctionLookupMap::iterator fnIter = mFnLookup.find(iter->addr);
-                                if (fnIter != mFnLookup.end())
-                                {
-                                    respFns.push_back(std::move(fnIter->second.callback));
-                                    mTimeoutLookup.erase(fnIter->second.timeoutMapIter);
-                                    mFnLookup.erase(fnIter);
-                                    ++iter;
-                                }
-                                else
-                                {
-                                    // Nothing around to process this packet (must have timed out)
-                                    iter = receivedPackets.erase(iter);
-                                }
-                            }
-                        }
-
-                        for (const std::uint64_t& addr: sendFailureAddresses)
-                        {
-                            FunctionLookupMap::iterator fnIter = mFnLookup.find(addr);
-                            if (fnIter != mFnLookup.end())
-                            {
-                                sendFailureFns.push_back(std::move(fnIter->second.callback));
-                                mTimeoutLookup.erase(fnIter->second.timeoutMapIter);
-                                mFnLookup.erase(fnIter);
-                            }
-                        }
-
-                        sendFailureAddresses.clear();
-
-                        // Accumulate timeout functions
-                        std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-
-                        for (auto iter = mTimeoutLookup.begin(); iter != mTimeoutLookup.end();)
-                        {
-                            if (now < iter->first)
-                            {
-                                break;
-                            }
-
-                            FunctionLookupMap::iterator fnLookupIter = mFnLookup.find(iter->second);
-                            if (fnLookupIter != mFnLookup.end())
-                            {
-                                timeoutFns.push_back(std::move(fnLookupIter->second.callback));
-                                mFnLookup.erase(fnLookupIter);
-                            }
-
-                            iter = mTimeoutLookup.erase(iter);
-                        }
-                    }
-
-                    // Execute send failure functions
-                    for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : sendFailureFns)
-                    {
-                        fn(::dpp_api::msg::rx::Msg::kCmdSendFailure, {});
-                    }
-
-                    // Execute send
-                    for (std::pair<const std::uint64_t, std::vector<std::uint8_t>>& data : dataToSend)
-                    {
-                        if (!mLibusbDevice->send(&data.second[0], static_cast<int>(data.second.size())))
-                        {
-                            sendFailureAddresses.push_back(data.first);
-                        }
-                    }
-
-                    // Execute for response
-                    auto respFnIter = respFns.begin();
-                    auto pktIter = receivedPackets.begin();
-                    for (; respFnIter != respFns.end() && pktIter != receivedPackets.end(); ++respFnIter, ++pktIter)
-                    {
-                        if (*respFnIter)
-                        {
-                            (*respFnIter)(pktIter->cmd, pktIter->payload);
-                        }
-                    }
-
-                    // Execute for timeout
-                    for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : timeoutFns)
-                    {
-                        fn(::dpp_api::msg::rx::Msg::kCmdTimeout, {});
-                    }
-                }
-
-                // Accumulate all hanging functions
-                std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> disconnectFns;
-
-                {
-                    std::unique_lock<std::mutex> lock(mTimeoutMutex);
-
-                    for (FunctionLookupMap::reference entry : mFnLookup)
-                    {
-                        disconnectFns.push_back(std::move(entry.second.callback));
-                    }
-
-                    mFnLookup.clear();
-                    mTimeoutLookup.clear();
-                }
-
-                // Execute for disconnect
-                for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : disconnectFns)
-                {
-                    fn(::dpp_api::msg::rx::Msg::kCmdDisconnect, {});
-                }
+                processEntrypoint();
             }
         );
 
@@ -432,6 +281,9 @@ public:
         return true;
     }
 
+    //! Disconnect from the previously connected device and stop all threads
+    //! @return false on failure and getLastErrorStr() will return error description
+    //! @return true if disconnection succeeded or was already disconnected
     bool disconnect()
     {
         bool closed = false;
@@ -481,7 +333,16 @@ public:
     {
         return mConnected;
     }
-
+    //! Send a raw command to DreamPicoPort
+    //! @param[in] cmd Raw DreamPicoPort command
+    //! @param[in] payload The payload for the command
+    //! @param[in] respFn The function to call on received response, timeout, or disconnect with the following arguments
+    //!                   cmd: one of the kCmd* values
+    //!                   payload: the returned payload
+    //!                   NOTICE: Any attempt to call connect() within any callback function will always fail
+    //! @param[in] timeoutMs Duration to wait before timeout
+    //! @return 0 if send failed and getLastErrorStr() will return error description
+    //! @return the ID of the sent data
     std::uint64_t send(
         std::uint8_t cmd,
         const std::vector<std::uint8_t>& payload,
@@ -522,7 +383,7 @@ public:
 
             mFnLookup[addr] = std::move(entry);
 
-            mOutgoingDataMap[addr] = std::move(packedData);
+            mOutgoingData.push_back(std::make_pair(addr, std::move(packedData)));
 
             mTimeoutCv.notify_all();
         }
@@ -530,29 +391,36 @@ public:
         return addr;
     }
 
+    //! Sets the maximum return address value used to tag each command
+    //! @note the minimum maximum is 0x0FFFFFFF to ensure proper execution
+    //! @param[in] maxAddr The maximum address value to set
     static void setMaxAddr(std::uint64_t maxAddr)
     {
         mMaxAddr = (std::max)(maxAddr, static_cast<std::uint64_t>(0x0FFFFFFF));
     }
 
+    //! @return the serial of this device
     const std::string& getSerial() const
     {
         return mLibusbDevice->mSerial;
     }
 
+    //! @return USB version number {major, minor, patch}
     std::array<std::uint8_t, 3> getVersion() const
     {
         return mLibusbDevice->getVersion();
     }
 
+    //! @return string representation of last error
     std::string getLastErrorStr()
     {
         return mLibusbDevice->getLastErrorStr();
     }
 
+    //! @return number of waiting responses
     std::size_t getNumWaiting()
     {
-        std::lock_guard<std::recursive_mutex> lock(mMutex);
+        std::lock_guard<std::mutex> lock(mTimeoutMutex);
         // Size of both of these maps should be equal
         return (std::max)(mFnLookup.size(), mTimeoutLookup.size());
     }
@@ -653,10 +521,8 @@ private:
                 continue;
             }
 
-            // Ready to fill the packet
-            DppPacket packet;
-
             // Extract address (variable-length, 7 bits per byte, MSb=1 if more bytes follow)
+            std::uint64_t addr = 0;
             std::int8_t addrLen = 0;
             bool lastByteBreak = false;
             std::size_t maxAddrSize = mReceiveBuffer.size() - kSizeMagic - kSizeSize - kSizeCrc;
@@ -671,7 +537,7 @@ private:
             ) {
                 const std::uint8_t mask = (i < (kMaxSizeAddress - 1)) ? 0x7f : 0xff;
                 const std::uint8_t thisByte = mReceiveBuffer[kSizeMagic + kSizeSize + i];
-                packet.addr |= (thisByte & mask) << (7 * i);
+                addr |= (thisByte & mask) << (7 * i);
                 ++addrLen;
                 if ((thisByte & 0x80) == 0)
                 {
@@ -687,12 +553,12 @@ private:
             }
 
             // Extract command
-            packet.cmd = mReceiveBuffer[kSizeMagic + kSizeSize + addrLen];
+            const std::uint8_t cmd = mReceiveBuffer[kSizeMagic + kSizeSize + addrLen];
 
             // Extract payload
             const std::size_t beginIdx = kSizeMagic + kSizeSize + addrLen + kSizeCommand;
             const std::size_t endIdx = kSizeMagic + kSizeSize + size - kSizeCrc;
-            packet.payload.assign(
+            std::vector<std::uint8_t> payload(
                 mReceiveBuffer.begin() + beginIdx,
                 mReceiveBuffer.begin() + endIdx
             );
@@ -703,12 +569,156 @@ private:
                 mReceiveBuffer.begin() + kSizeMagic + kSizeSize + size
             );
 
-            // Process the data
+            std::function<void(std::uint8_t cmd, std::vector<std::uint8_t>& payload)> respFn;
+
+            {
+                std::lock_guard<std::mutex> lock(mTimeoutMutex);
+                FunctionLookupMap::iterator iter = mFnLookup.find(addr);
+                if (iter != mFnLookup.end())
+                {
+                    respFn = std::move(iter->second.callback);
+                    mTimeoutLookup.erase(iter->second.timeoutMapIter);
+                    mFnLookup.erase(iter);
+                }
+            }
+
+            if (respFn)
+            {
+                respFn(cmd, payload);
+            }
+        }
+    }
+
+    void processEntrypoint()
+    {
+        while (true)
+        {
+            std::list<std::pair<std::uint64_t, std::vector<std::uint8_t>>> dataToSend;
+            std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> timeoutFns;
+
             {
                 std::unique_lock<std::mutex> lock(mTimeoutMutex);
-                mIncomingPackets.push_back(std::move(packet));
-                mTimeoutCv.notify_all();
+
+                bool waitResult = true;
+
+                if (mTimeoutLookup.empty())
+                {
+                    mTimeoutCv.wait(
+                        lock,
+                        [this]()
+                        {
+                            return !isConnected() || !mOutgoingData.empty();
+                        }
+                    );
+                }
+                else
+                {
+                    std::chrono::system_clock::time_point nextTimePoint = mTimeoutLookup.begin()->first;
+                    waitResult = mTimeoutCv.wait_until(
+                        lock,
+                        nextTimePoint,
+                        [this]()
+                        {
+                            return !isConnected() || !mOutgoingData.empty();
+                        }
+                    );
+                }
+
+                if (!isConnected())
+                {
+                    return;
+                }
+                else if (waitResult)
+                {
+                    dataToSend = std::move(mOutgoingData);
+                    mOutgoingData.clear();
+                }
+                else
+                {
+                    // Accumulate timeout functions
+                    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+
+                    for (auto iter = mTimeoutLookup.begin(); iter != mTimeoutLookup.end();)
+                    {
+                        if (now < iter->first)
+                        {
+                            break;
+                        }
+
+                        FunctionLookupMap::iterator fnLookupIter = mFnLookup.find(iter->second);
+                        if (fnLookupIter != mFnLookup.end())
+                        {
+                            timeoutFns.push_back(std::move(fnLookupIter->second.callback));
+                            mFnLookup.erase(fnLookupIter);
+                        }
+
+                        iter = mTimeoutLookup.erase(iter);
+                    }
+                }
             }
+
+            // Execute send
+            std::list<std::uint64_t> sendFailureAddresses;
+            for (std::pair<std::uint64_t, std::vector<std::uint8_t>>& data : dataToSend)
+            {
+                if (!mLibusbDevice->send(&data.second[0], static_cast<int>(data.second.size())))
+                {
+                    sendFailureAddresses.push_back(data.first);
+                }
+            }
+
+            if (!sendFailureAddresses.empty())
+            {
+                std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> sendFailureFns;
+
+                {
+                    std::unique_lock<std::mutex> lock(mTimeoutMutex);
+
+                    for (const std::uint64_t& addr: sendFailureAddresses)
+                    {
+                        FunctionLookupMap::iterator fnIter = mFnLookup.find(addr);
+                        if (fnIter != mFnLookup.end())
+                        {
+                            sendFailureFns.push_back(std::move(fnIter->second.callback));
+                            mTimeoutLookup.erase(fnIter->second.timeoutMapIter);
+                            mFnLookup.erase(fnIter);
+                        }
+                    }
+                }
+
+                // Execute send failure functions
+                for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : sendFailureFns)
+                {
+                    fn(::dpp_api::msg::rx::Msg::kCmdSendFailure, {});
+                }
+            }
+
+            // Execute for timeout
+            for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : timeoutFns)
+            {
+                fn(::dpp_api::msg::rx::Msg::kCmdTimeout, {});
+            }
+        }
+
+        // Accumulate all hanging functions
+        std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> disconnectFns;
+
+        {
+            std::unique_lock<std::mutex> lock(mTimeoutMutex);
+
+            for (FunctionLookupMap::reference entry : mFnLookup)
+            {
+                disconnectFns.push_back(std::move(entry.second.callback));
+            }
+
+            mFnLookup.clear();
+            mTimeoutLookup.clear();
+        }
+
+        // Execute for disconnect
+        for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : disconnectFns)
+        {
+            fn(::dpp_api::msg::rx::Msg::kCmdDisconnect, {});
         }
     }
 
@@ -749,16 +759,10 @@ private:
     std::mutex mTimeoutMutex;
     //! Mutex used to serialize access to class data
     std::recursive_mutex mMutex;
+    //! Holds received bytes not yet parsed into a packet
     std::vector<std::uint8_t> mReceiveBuffer;
-
-    std::map<std::uint64_t, std::vector<std::uint8_t>> mOutgoingDataMap;
-    struct DppPacket
-    {
-        std::uint64_t addr = 0;
-        std::uint8_t cmd = 0;
-        std::vector<std::uint8_t> payload;
-    };
-    std::list<DppPacket> mIncomingPackets;
+    //! Holds data not yet send
+    std::list<std::pair<std::uint64_t, std::vector<std::uint8_t>>> mOutgoingData;
 };
 
 // (essentially, 4 byte max for address length at 7 bits of data per byte)

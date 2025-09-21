@@ -503,60 +503,67 @@ int main(int argc, char **argv)
             return 2;
         }
 
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Test result: can read 1 VMU in 2.2 seconds and 4 VMUs in parallel in 2.6 seconds \o/
-        // auto start = std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::high_resolution_clock::now();
 
-        // sent = dppDevice->send(
-        //     dpp_api::msg::tx::Maple{{0x0B, 0x01, 0x00, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
-        //     [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
-        //     500
-        // );
+        sent = dppDevice->send(
+            dpp_api::msg::tx::Maple{{0x0B, 0x01, 0x00, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
+            [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
+            500
+        );
 
-        // if (!parse_send_id(sent, numExpected))
-        // {
-        //     return 2;
-        // }
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
 
-        // sent = dppDevice->send(
-        //     dpp_api::msg::tx::Maple{{0x0B, 0x41, 0x40, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
-        //     [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
-        //     500
-        // );
+        std::this_thread::sleep_for(std::chrono::microseconds(2500));
 
-        // if (!parse_send_id(sent, numExpected))
-        // {
-        //     return 2;
-        // }
+        sent = dppDevice->send(
+            dpp_api::msg::tx::Maple{{0x0B, 0x41, 0x40, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
+            [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
+            500
+        );
 
-        // sent = dppDevice->send(
-        //     dpp_api::msg::tx::Maple{{0x0B, 0x81, 0x80, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
-        //     [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
-        //     500
-        // );
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
 
-        // if (!parse_send_id(sent, numExpected))
-        // {
-        //     return 2;
-        // }
+        std::this_thread::sleep_for(std::chrono::microseconds(2500));
 
-        // sent = dppDevice->send(
-        //     dpp_api::msg::tx::Maple{{0x0B, 0xC1, 0xC0, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
-        //     [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
-        //     500
-        // );
+        sent = dppDevice->send(
+            dpp_api::msg::tx::Maple{{0x0B, 0x81, 0x80, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
+            [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
+            500
+        );
 
-        // if (!parse_send_id(sent, numExpected))
-        // {
-        //     return 2;
-        // }
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
+
+        std::this_thread::sleep_for(std::chrono::microseconds(2500));
+
+        sent = dppDevice->send(
+            dpp_api::msg::tx::Maple{{0x0B, 0xC1, 0xC0, 2, 0, 0, 0, 2, 0, 0, 0, 0}},
+            [dppDevice](dpp_api::msg::rx::Maple& msg){read_response(dppDevice, msg);},
+            500
+        );
+
+        if (!parse_send_id(sent, numExpected))
+        {
+            return 2;
+        }
 
         // Wait until all asynchronous commands fully process
         wait_async_complete(numExpected);
 
-        // auto end = std::chrono::high_resolution_clock::now();
-        // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        // printf("Time elapsed: %lld ms\n", static_cast<long long>(duration.count()));
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        printf("Time elapsed: %lld ms\n", static_cast<long long>(duration.count()));
 
         // Test a synchronous command
         dpp_api::msg::rx::GetControllerState st = dppDevice->send(dpp_api::msg::tx::GetControllerState{0}, 500);

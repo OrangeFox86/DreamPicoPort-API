@@ -1,4 +1,5 @@
-#pragma once
+#ifndef __DREAM_PICO_PORT_API_HPP__
+#define __DREAM_PICO_PORT_API_HPP__
 
 // MIT License
 //
@@ -548,3 +549,5 @@ private:
 };
 
 }
+
+#endif // __DREAM_PICO_PORT_API_HPP__

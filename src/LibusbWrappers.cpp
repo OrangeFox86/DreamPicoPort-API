@@ -1,3 +1,25 @@
+// MIT License
+//
+// Copyright (c) 2025 James Smith of OrangeFox86
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 #include "LibusbWrappers.hpp"
 
 #include <libusb.h>
@@ -585,13 +607,13 @@ bool LibusbDevice::createTransfers()
                 break;
             }
             transferData = std::make_unique<TransferData>();
-            transferData->tranfer.reset(transfer);
+            transferData->transfer.reset(transfer);
         }
 
         transferData->buffer.resize(kRxSize);
 
         libusb_fill_bulk_transfer(
-            transferData->tranfer.get(),
+            transferData->transfer.get(),
             mLibusbDeviceHandle.get(),
             mEpIn,
             &transferData->buffer[0],
@@ -604,7 +626,7 @@ bool LibusbDevice::createTransfers()
         {
             std::lock_guard<std::recursive_mutex> lock(mTransferDataMapMutex);
 
-            int r = libusb_submit_transfer(transferData->tranfer.get());
+            int r = libusb_submit_transfer(transferData->transfer.get());
             if (r < 0)
             {
                 mLastLibusbError.saveError(r, "libusb_submit_transfer");
@@ -612,7 +634,7 @@ bool LibusbDevice::createTransfers()
                 break;
             }
 
-            mTransferDataMap.insert(std::make_pair(transferData->tranfer.get(), std::move(transferData)));
+            mTransferDataMap.insert(std::make_pair(transferData->transfer.get(), std::move(transferData)));
         }
     }
 
@@ -712,7 +734,7 @@ void LibusbDevice::cancelTransfers()
 
     for (auto& pair : mTransferDataMap)
     {
-        libusb_cancel_transfer(pair.second->tranfer.get());
+        libusb_cancel_transfer(pair.second->transfer.get());
     }
 }
 

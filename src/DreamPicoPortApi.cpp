@@ -214,7 +214,7 @@ public:
     //!               NOTICE: Any attempt to call connect() within any callback function will always fail
     //! @return false on failure and getLastErrorStr() will return error description
     //! @return true if connection succeeded
-    bool connect(const std::function<void(const std::string& errStr)>& fn)
+    bool connect(const std::function<void(std::string& errStr)>& fn)
     {
         // This function may not be called from any callback context (would cause deadlock)
         if (mLibusbDevice->isThisThreadReading())
@@ -224,9 +224,9 @@ public:
         }
         else
         {
-            // (never take mMutex after taking mTimeoutThreadMutex)
-            std::lock_guard<std::mutex> lock(mTimeoutThreadMutex);
-            if (mTimeoutThread && mTimeoutThread->get_id() == std::this_thread::get_id())
+            // (never lock mConnectionMutex while mProcessThreadMutex is locked)
+            std::lock_guard<std::mutex> lock(mProcessThreadMutex);
+            if (mProcessThread && mProcessThread->get_id() == std::this_thread::get_id())
             {
                 setExternalError("connect attempted within timeout callback context");
                 return false;
@@ -239,22 +239,22 @@ public:
             return false;
         }
 
-        std::lock_guard<std::recursive_mutex> lock(mMutex);
+        std::lock_guard<std::recursive_mutex> lock(mConnectionMutex);
 
         if (!mLibusbDevice->openInterface())
         {
             return false;
         }
 
-        std::function<void(const std::string&)> completeFn;
+        std::function<void(std::string&)> completeFn;
 
         if (fn)
         {
-            completeFn = [this, fn](const std::string& errStr){ disconnect(); fn(errStr); };
+            completeFn = [this, fn](std::string& errStr){ disconnect(); fn(errStr); };
         }
         else
         {
-            completeFn = [this](const std::string& errStr){ disconnect(); };
+            completeFn = [this](std::string& errStr){ disconnect(); };
         }
 
         if (
@@ -267,9 +267,9 @@ public:
             return false;
         }
 
-        std::lock_guard<std::mutex> timeoutThreadLock(mTimeoutThreadMutex);
+        std::lock_guard<std::mutex> timeoutThreadLock(mProcessThreadMutex);
 
-        mTimeoutThread = std::make_unique<std::thread>(
+        mProcessThread = std::make_unique<std::thread>(
             [this]()
             {
                 processEntrypoint();
@@ -291,19 +291,19 @@ public:
         std::unique_ptr<std::thread> timeoutThread;
 
         {
-            std::lock_guard<std::recursive_mutex> lock(mMutex);
+            std::lock_guard<std::recursive_mutex> lock(mConnectionMutex);
 
             mConnected = false;
 
             {
-                std::lock_guard<std::mutex> lock(mTimeoutThreadMutex);
-                if (mTimeoutThread)
+                std::lock_guard<std::mutex> lock(mProcessThreadMutex);
+                if (mProcessThread)
                 {
-                    std::lock_guard<std::mutex> lock(mTimeoutMutex);
-                    mTimeoutCv.notify_all();
-                    if (mTimeoutThread->get_id() != std::this_thread::get_id())
+                    std::lock_guard<std::mutex> lock(mProcessMutex);
+                    mProcessCv.notify_all();
+                    if (mProcessThread->get_id() != std::this_thread::get_id())
                     {
-                        timeoutThread = std::move(mTimeoutThread);
+                        timeoutThread = std::move(mProcessThread);
                     }
                 }
             }
@@ -353,7 +353,7 @@ public:
         std::uint64_t addr = 0;
 
         {
-            std::lock_guard<std::recursive_mutex> lock(mMutex);
+            std::lock_guard<std::mutex> lock(mNextAddrMutex);
 
             if (mNextAddr < kMinAddr)
             {
@@ -372,7 +372,7 @@ public:
 
         if (respFn)
         {
-            std::lock_guard<std::mutex> lock(mTimeoutMutex);
+            std::lock_guard<std::mutex> lock(mProcessMutex);
 
             std::chrono::system_clock::time_point expiration =
                 std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs);
@@ -385,7 +385,7 @@ public:
 
             mOutgoingData.push_back({addr, std::move(packedData)});
 
-            mTimeoutCv.notify_all();
+            mProcessCv.notify_all();
         }
 
         return addr;
@@ -420,7 +420,7 @@ public:
     //! @return number of waiting responses
     std::size_t getNumWaiting()
     {
-        std::lock_guard<std::mutex> lock(mTimeoutMutex);
+        std::lock_guard<std::mutex> lock(mProcessMutex);
         // Size of both of these maps should be equal
         return (std::max)(mFnLookup.size(), mTimeoutLookup.size());
     }
@@ -572,7 +572,7 @@ private:
             std::function<void(std::uint8_t cmd, std::vector<std::uint8_t>& payload)> respFn;
 
             {
-                std::lock_guard<std::mutex> lock(mTimeoutMutex);
+                std::lock_guard<std::mutex> lock(mProcessMutex);
                 FunctionLookupMap::iterator iter = mFnLookup.find(addr);
                 if (iter != mFnLookup.end())
                 {
@@ -597,13 +597,13 @@ private:
             std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> timeoutFns;
 
             {
-                std::unique_lock<std::mutex> lock(mTimeoutMutex);
+                std::unique_lock<std::mutex> lock(mProcessMutex);
 
                 bool waitResult = true;
 
                 if (mTimeoutLookup.empty())
                 {
-                    mTimeoutCv.wait(
+                    mProcessCv.wait(
                         lock,
                         [this]()
                         {
@@ -614,7 +614,7 @@ private:
                 else
                 {
                     std::chrono::system_clock::time_point nextTimePoint = mTimeoutLookup.begin()->first;
-                    waitResult = mTimeoutCv.wait_until(
+                    waitResult = mProcessCv.wait_until(
                         lock,
                         nextTimePoint,
                         [this]()
@@ -626,7 +626,7 @@ private:
 
                 if (!isConnected())
                 {
-                    return;
+                    break;
                 }
                 else if (waitResult)
                 {
@@ -672,7 +672,7 @@ private:
                 std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> sendFailureFns;
 
                 {
-                    std::unique_lock<std::mutex> lock(mTimeoutMutex);
+                    std::unique_lock<std::mutex> lock(mProcessMutex);
 
                     for (const std::uint64_t& addr: sendFailureAddresses)
                     {
@@ -704,7 +704,7 @@ private:
         std::list<std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>> disconnectFns;
 
         {
-            std::unique_lock<std::mutex> lock(mTimeoutMutex);
+            std::unique_lock<std::mutex> lock(mProcessMutex);
 
             for (FunctionLookupMap::reference entry : mFnLookup)
             {
@@ -743,22 +743,24 @@ private:
     FunctionLookupMap mFnLookup;
     //! This is used to organize chronologically the timeout values for each key in the above mFnLookup
     std::multimap<std::chrono::system_clock::time_point, std::uint64_t> mTimeoutLookup;
+    //! Condition variable signaled when data is added to one of the lookups, waited on within mProcessThread
+    std::condition_variable mProcessCv;
+    //! Mutex used to serialize access to mFnLookup, mTimeoutLookup, and mProcessCv
+    std::mutex mProcessMutex;
     //! The minimum value for mNextAddr
     static const std::uint64_t kMinAddr = 1;
     //! The maximum value for mNextAddr
     static std::uint64_t mMaxAddr;
     //! Next available return address
     std::uint64_t mNextAddr = kMinAddr;
-    //! Thread which executes response timeouts
-    std::unique_ptr<std::thread> mTimeoutThread;
-    //! Mutex which serializes access specifically to mTimeoutThread
-    std::mutex mTimeoutThreadMutex;
-    //! Condition variable signaled when data is added to one of the lookups, waited on within mTimeoutThread
-    std::condition_variable mTimeoutCv;
-    //! Mutex used to serialize access to mFnLookup, mTimeoutLookup, and mTimeoutCv
-    std::mutex mTimeoutMutex;
-    //! Mutex used to serialize access to class data
-    std::recursive_mutex mMutex;
+    //! Mutex serializing access to mNextAddr
+    std::mutex mNextAddrMutex;
+    //! Thread which executes send and response timeouts
+    std::unique_ptr<std::thread> mProcessThread;
+    //! Mutex which serializes access specifically to mProcessThread
+    std::mutex mProcessThreadMutex;
+    //! Mutex used to serialize connect() and disconnect() calls
+    std::recursive_mutex mConnectionMutex;
     //! Holds received bytes not yet parsed into a packet
     std::vector<std::uint8_t> mReceiveBuffer;
 
@@ -1098,7 +1100,7 @@ std::string DppDevice::getLastErrorStr()
     return mImp->getLastErrorStr();
 }
 
-bool DppDevice::connect(const std::function<void(const std::string& errStr)>& fn)
+bool DppDevice::connect(const std::function<void(std::string& errStr)>& fn)
 {
     return mImp->connect(fn);
 }

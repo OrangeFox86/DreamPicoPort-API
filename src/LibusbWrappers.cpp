@@ -620,7 +620,7 @@ bool LibusbDevice::createTransfers()
 
 bool LibusbDevice::beginRead(
     const std::function<void(const std::uint8_t*, int)>& rxFn,
-    const std::function<void(const std::string&)>& completeFn
+    const std::function<void(std::string&)>& completeFn
 )
 {
     if (!openInterface())
@@ -679,7 +679,8 @@ bool LibusbDevice::beginRead(
 
             if (mRxCompleteFn)
             {
-                mRxCompleteFn(getLastErrorStr());
+                std::string errStr = getLastErrorStr();
+                mRxCompleteFn(errStr);
             }
         }
     );

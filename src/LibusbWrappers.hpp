@@ -214,7 +214,7 @@ public:
     //! @return true if interface was open or opened and read thread was started
     bool beginRead(
         const std::function<void(const std::uint8_t*, int)>& rxFn,
-        const std::function<void(const std::string&)>& completeFn
+        const std::function<void(std::string&)>& completeFn
     );
 
     //! Request stop of the read thread
@@ -310,7 +310,7 @@ private:
     //! The function to call whenever a packet is received
     std::function<void(const std::uint8_t*, int)> mRxFn;
     //! The function to call when the read thread exits
-    std::function<void(const std::string&)> mRxCompleteFn;
+    std::function<void(std::string&)> mRxCompleteFn;
     //! Contains last libusb error data
     LibusbError mLastLibusbError;
     //! Set to true on first connection in order to force reset on subsequent connection

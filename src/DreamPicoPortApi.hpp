@@ -430,7 +430,7 @@ public:
     //!               NOTICE: Any attempt to call connect() within any callback function will always fail
     //! @return false on failure and getLastErrorStr() will return error description
     //! @return true if connection succeeded
-    bool connect(const std::function<void(const std::string& errStr)>& fn = nullptr);
+    bool connect(const std::function<void(std::string& errStr)>& fn = nullptr);
 
     //! Disconnect from the previously connected device and stop all threads
     //! @return false on failure and getLastErrorStr() will return error description

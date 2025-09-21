@@ -536,58 +536,8 @@ public:
     std::uint8_t getEpOut();
 
 private:
-    //! Handle received data
-    //! @param[in] buffer Buffer received from libusb
-    //! @param[in] len Number of bytes in buffer received
-    void handleReceive(const std::uint8_t* buffer, int len);
-
-private:
     //! Forward declared pointer to internal implementation class
     std::unique_ptr<class DppDeviceImp> mImp;
-
-    //! The map entry for callback lookup
-    struct FunctionLookupMapEntry
-    {
-        //! The callback to use when this message is received
-        std::function<void(std::int16_t cmd, std::vector<std::uint8_t>& payload)> callback;
-        //! Iterator into the timeout map which should be removed once the message is received
-        std::multimap<std::chrono::system_clock::time_point, std::uint64_t>::iterator timeoutMapIter;
-    };
-
-    //! The map type which links return address to FunctionLookupMapEntry
-    using FunctionLookupMap = std::unordered_map<std::uint64_t, FunctionLookupMapEntry>;
-
-    //! True when connected, false when disconnected
-    bool mConnected = false;
-    //! Maps return address to FunctionLookupMapEntry
-    FunctionLookupMap mFnLookup;
-    //! This is used to organize chronologically the timeout values for each key in the above mFnLookup
-    std::multimap<std::chrono::system_clock::time_point, std::uint64_t> mTimeoutLookup;
-    //! The minimum value for mNextAddr
-    static const std::uint64_t kMinAddr = 1;
-    //! The maximum value for mNextAddr
-    static std::uint64_t mMaxAddr;
-    //! Next available return address
-    std::uint64_t mNextAddr = kMinAddr;
-    //! Thread which executes response timeouts
-    std::unique_ptr<std::thread> mTimeoutThread;
-    //! Mutex which serializes access specifically to mTimeoutThread
-    std::mutex mTimeoutThreadMutex;
-    //! Condition variable signaled when data is added to one of the lookups, waited on within mTimeoutThread
-    std::condition_variable mTimeoutCv;
-    //! Mutex used to serialize access to mFnLookup, mTimeoutLookup, and mTimeoutCv
-    std::mutex mTimeoutMutex;
-    //! Mutex used to serialize access to class data
-    std::recursive_mutex mMutex;
-    std::vector<std::uint8_t> mReceiveBuffer;
-
-    struct DppPacket
-    {
-        std::uint64_t addr = 0;
-        std::uint8_t cmd = 0;
-        std::vector<std::uint8_t> payload;
-    };
-    std::list<DppPacket> mReceivedPackets;
 };
 
 }

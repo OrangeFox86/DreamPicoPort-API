@@ -110,7 +110,7 @@ void LibusbError::saveError(int libusbError, const char* where)
 void LibusbError::saveErrorIfNotSet(int libusbError, const char* where)
 {
     std::lock_guard<std::mutex> lock(mMutex);
-    if (mLastLibusbError != LIBUSB_SUCCESS)
+    if (mLastLibusbError == LIBUSB_SUCCESS)
     {
         mLastLibusbError = libusbError;
         mWhere = where;
@@ -172,6 +172,7 @@ const char* LibusbError::getLibusbErrorStr(int libusbError)
         case LIBUSB_ERROR_NO_MEM: return "Insufficient memory";
         case LIBUSB_ERROR_NOT_SUPPORTED: return "Operation not supported or unimplemented on this platform";
         case LIBUSB_ERROR_OTHER: return "Undefined error";
+        case LIBUSB_ERROR_OTHER - 1: return ""; // Error external to this component
         default:
             return libusb_error_name(libusbError);
     }
@@ -268,7 +269,6 @@ LibusbDevice::LibusbDevice(
 LibusbDevice::~LibusbDevice()
 {
     closeInterface();
-    joinRead();
 
     // Reset libusb pointers in the correct order
     mLibusbDeviceHandle.reset();
@@ -288,6 +288,7 @@ bool LibusbDevice::openInterface()
     if (mPreviouslyConnected || !mLibusbDeviceHandle)
     {
         // Reset and attempt to reconnect
+        cancelTransfers();
         mLibusbDeviceHandle.reset();
         mTransferDataMap.clear();
 
@@ -473,7 +474,7 @@ void LibusbDevice::transferComplete(libusb_transfer* transfer)
 
             case LIBUSB_TRANSFER_STALL:
             {
-                mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - stall");
+                mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - stall or disconnected");
                 allowNewTransfer = false;
                 // Set stallDetected which will prevent device from closing unless other errors occur
                 stallDetected = true;
@@ -496,7 +497,7 @@ void LibusbDevice::transferComplete(libusb_transfer* transfer)
 
             case LIBUSB_TRANSFER_NO_DEVICE:
             {
-                mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - couldn't find device");
+                mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - disconnected");
                 allowNewTransfer = false;
                 noDevice = true;
             }
@@ -628,16 +629,8 @@ bool LibusbDevice::createTransfers()
     return success;
 }
 
-bool LibusbDevice::beginRead(
-    const std::function<void(const std::uint8_t*, int)>& rxFn,
-    const std::function<void(std::string&)>& completeFn
-)
+bool LibusbDevice::run(const std::function<void(const std::uint8_t*, int)>& rxFn)
 {
-    if (!openInterface())
-    {
-        return false;
-    }
-
     if (!createTransfers())
     {
         return false;
@@ -646,54 +639,53 @@ bool LibusbDevice::beginRead(
     mExitRequested = false;
     mRxStalled = false;
     mRxFn = rxFn;
-    mRxCompleteFn = completeFn;
 
-    std::lock_guard<std::recursive_mutex> lock(mReadThreadMutex);
-    mReadThread = std::make_unique<std::thread>(
-        [this]()
+    while (mInterfaceClaimed && !mExitRequested)
+    {
+        if (mRxStalled && mTransferDataMap.empty())
         {
-            while (mInterfaceClaimed && !mExitRequested)
+            if (!mLibusbDeviceHandle)
             {
-                if (mRxStalled && mTransferDataMap.empty())
-                {
-                    if (!mLibusbDeviceHandle)
-                    {
-                        mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "Device handle freed");
-                        mExitRequested = true;
-                        break;
-                    }
-
-                    int r = libusb_clear_halt(mLibusbDeviceHandle.get(), mEpIn);
-                    if (r < 0)
-                    {
-                        mLastLibusbError.saveError(r, "libusb_clear_halt");
-                        mExitRequested = true;
-                        break;
-                    }
-
-                    if (!createTransfers())
-                    {
-                        mExitRequested = true;
-                        break;
-                    }
-                }
-
-                int r = libusb_handle_events(mLibusbContext.get());
-                if (r < 0)
-                {
-                    mLastLibusbError.saveError(r, "libusb_handle_events");
-                    mExitRequested = true;
-                    break;
-                }
+                mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "Device handle freed");
+                mExitRequested = true;
+                break;
             }
 
-            if (mRxCompleteFn)
+            int r = libusb_clear_halt(mLibusbDeviceHandle.get(), mEpIn);
+            if (r < 0)
             {
-                std::string errStr = getLastErrorStr();
-                mRxCompleteFn(errStr);
+                mLastLibusbError.saveError(r, "libusb_clear_halt");
+                mExitRequested = true;
+                break;
+            }
+
+            if (!createTransfers())
+            {
+                mExitRequested = true;
+                break;
             }
         }
-    );
+
+        int r = libusb_handle_events(mLibusbContext.get());
+        if (r < 0)
+        {
+            mLastLibusbError.saveError(r, "libusb_handle_events");
+            mExitRequested = true;
+            break;
+        }
+    }
+
+    cancelTransfers();
+    while (!mTransferDataMap.empty())
+    {
+        int r = libusb_handle_events(mLibusbContext.get());
+        if (r < 0)
+        {
+            mLastLibusbError.saveError(r, "libusb_handle_events");
+            mExitRequested = true;
+            break;
+        }
+    }
 
     return true;
 }
@@ -716,32 +708,6 @@ void LibusbDevice::cancelTransfers()
     for (auto& pair : mTransferDataMap)
     {
         libusb_cancel_transfer(pair.second->tranfer.get());
-    }
-}
-
-bool LibusbDevice::isThisThreadReading()
-{
-    std::lock_guard<std::recursive_mutex> lock(mReadThreadMutex);
-    return (mReadThread && mReadThread->get_id() == std::this_thread::get_id());
-}
-
-std::unique_ptr<std::thread> LibusbDevice::consumeReadThread()
-{
-    std::unique_ptr<std::thread> readThread;
-    std::lock_guard<std::recursive_mutex> lock(mReadThreadMutex);
-    if (!isThisThreadReading())
-    {
-        readThread = std::move(mReadThread);
-    }
-    return readThread;
-}
-
-void LibusbDevice::joinRead()
-{
-    std::unique_ptr<std::thread> readThread = consumeReadThread();
-    if (readThread)
-    {
-        readThread->join();
     }
 }
 
@@ -802,7 +768,7 @@ std::array<std::uint8_t, 3> LibusbDevice::getVersion() const
 
 void LibusbDevice::setExternalError(const char* where)
 {
-    mLastLibusbError.saveErrorIfNotSet(LIBUSB_SUCCESS, where);
+    mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_OTHER - 1, where);
 }
 
 int LibusbDevice::getInterfaceNumber()

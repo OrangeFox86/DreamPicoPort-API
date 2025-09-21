@@ -27,6 +27,7 @@
 // - Test attempt to send when not connected
 // - dissconnect() and send() may be called from any callback
 // - Physically removing the device will automatically disconnect()
+// - Connect, disconnect, reconnect and all of the above still works
 
 #include "DreamPicoPortApi.hpp"
 

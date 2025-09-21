@@ -216,19 +216,16 @@ public:
     //! @return true if connection succeeded
     bool connect(const std::function<void(std::string& errStr)>& fn)
     {
-        // This function may not be called from any callback context (would cause deadlock)
-        if (mLibusbDevice->isThisThreadReading())
-        {
-            setExternalError("connect attempted within read callback context");
-            return false;
-        }
-        else
+        // This function may not be called from any thread context (would cause deadlock)
         {
             // (never lock mConnectionMutex while mProcessThreadMutex is locked)
             std::lock_guard<std::mutex> lock(mProcessMutex);
-            if (mProcessThread && mProcessThread->get_id() == std::this_thread::get_id())
+            if (
+                (mProcessThread && mProcessThread->get_id() == std::this_thread::get_id()) ||
+                (mReadThread && mReadThread->get_id() == std::this_thread::get_id())
+            )
             {
-                setExternalError("connect attempted within timeout callback context");
+                setExternalError("connect attempted within thread context");
                 return false;
             }
         }
@@ -253,19 +250,25 @@ public:
             return false;
         }
 
-        if (
-            !mLibusbDevice->beginRead(
-                [this](const std::uint8_t* buffer, int len){ handleReceive(buffer, len); },
-                [this](std::string& errStr){ disconnect(); }
-            )
-        )
-        {
-            return false;
-        }
-
-        std::lock_guard<std::mutex> timeoutThreadLock(mProcessMutex);
+        std::lock_guard<std::mutex> threadLock(mProcessMutex);
 
         mProcessing = true;
+
+        mReadThread = std::make_unique<std::thread>(
+            [this]()
+            {
+                mLibusbDevice->run([this](const std::uint8_t* buffer, int len){ handleReceive(buffer, len); });
+
+                // Save the error description at this point
+                {
+                    std::lock_guard<std::mutex> lock(mDisconnectMutex);
+                    mDisconnectReason = mLibusbDevice->getLastErrorStr();
+                }
+
+                // Ensure disconnection
+                disconnect();
+            }
+        );
 
         mProcessThread = std::make_unique<std::thread>(
             [this]()
@@ -286,26 +289,21 @@ public:
     {
         bool inThreadContext = false;
 
-        // This function may not be called from any callback context (would cause deadlock)
-        if (mLibusbDevice->isThisThreadReading())
-        {
-            // Disconnect without joining
-            std::lock_guard<std::mutex> lock(mProcessMutex);
-            mProcessing = false;
-            mProcessCv.notify_all();
-            mLibusbDevice->stopRead();
-            return true;
-        }
-        else
+        // Do not take mConnectionMutex while in thread context. Instead, simply stop processing without joining.
         {
             // (never lock mConnectionMutex while mProcessThreadMutex is locked)
             std::lock_guard<std::mutex> lock(mProcessMutex);
-            if (mProcessThread && mProcessThread->get_id() == std::this_thread::get_id())
+            bool isReadThread = (mReadThread && mReadThread->get_id() == std::this_thread::get_id());
+            bool isProcessThread = (mProcessThread && mProcessThread->get_id() == std::this_thread::get_id());
+            if (isReadThread || isProcessThread)
             {
-                // Disconnect without joining
-                mProcessing = false;
-                mProcessCv.notify_all();
+                // Stop processing without joining
                 mLibusbDevice->stopRead();
+                if (isReadThread)
+                {
+                    mProcessing = false;
+                    mProcessCv.notify_all();
+                }
                 return true;
             }
         }
@@ -317,21 +315,17 @@ public:
         // Calling this may cause a call to disconnect() from the read thread
         bool closed = mLibusbDevice->closeInterface();
 
-        std::unique_ptr<std::thread> processThread;
-
+        if (mReadThread)
         {
-            std::lock_guard<std::mutex> lock(mProcessMutex);
-            mProcessing = false;
-            mProcessCv.notify_all();
-            processThread = std::move(mProcessThread);
+            mReadThread->join();
+            mReadThread.reset();
         }
 
-        if (processThread)
+        if (mProcessThread)
         {
-            processThread->join();
+            mProcessThread->join();
+            mProcessThread.reset();
         }
-
-        mLibusbDevice->joinRead();
 
         return closed;
     }
@@ -824,6 +818,8 @@ private:
     std::uint64_t mNextAddr = kMinAddr;
     //! Mutex serializing access to mNextAddr
     std::mutex mNextAddrMutex;
+    //! The read thread created on connect()
+    std::unique_ptr<std::thread> mReadThread;
     //! Thread which executes send, receive callback execution, and response timeout callback execution
     std::unique_ptr<std::thread> mProcessThread;
     //! Mutex used to serialize connect() and disconnect() calls

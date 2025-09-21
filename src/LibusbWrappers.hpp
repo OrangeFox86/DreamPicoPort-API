@@ -208,26 +208,13 @@ public:
     //! @return true if data was successfully sent
     bool send(std::uint8_t* data, int length, unsigned int timeoutMs = 1000);
 
-    //! Starts the read thread
+    //! Starts the asynchronous interface and blocks until disconnect
     //! @param[in] rxFn The function to call when a full packet is received
-    //! @param[in] completeFn The function to call on disconnect
     //! @return true if interface was open or opened and read thread was started
-    bool beginRead(
-        const std::function<void(const std::uint8_t*, int)>& rxFn,
-        const std::function<void(std::string&)>& completeFn
-    );
+    bool run(const std::function<void(const std::uint8_t*, int)>& rxFn);
 
     //! Request stop of the read thread
     void stopRead();
-
-    //! @return true iff the current thread is the read thread
-    bool isThisThreadReading();
-
-    // Consumes the read thread so it may be externally joined
-    std::unique_ptr<std::thread> consumeReadThread();
-
-    //! Wait for the read thread to complete
-    void joinRead();
 
     //! Closes the interface
     //! @return true if interface was closed or was already closed
@@ -303,14 +290,8 @@ private:
     std::uint8_t mEpIn = 0;
     //! The IN endpoint of mInterfaceNumber where bulk data is written
     std::uint8_t mEpOut = 0;
-    //! The read thread created on beginRead()
-    std::unique_ptr<std::thread> mReadThread;
-    //! Serializes access to mReadThread
-    std::recursive_mutex mReadThreadMutex;
     //! The function to call whenever a packet is received
     std::function<void(const std::uint8_t*, int)> mRxFn;
-    //! The function to call when the read thread exits
-    std::function<void(std::string&)> mRxCompleteFn;
     //! Contains last libusb error data
     LibusbError mLastLibusbError;
     //! Set to true on first connection in order to force reset on subsequent connection

@@ -377,6 +377,7 @@ private:
 
 public:
     //! Destructor
+    //! NOTICE: DppDevice may not be destructed from any callback
     virtual ~DppDevice();
 
     //! Filter used to find a DreamPicoPort device

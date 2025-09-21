@@ -22,6 +22,12 @@
 
 //! @file this file is a hodge-podge of different tests (not meant to be thorough or give any PASS/FAIL result)
 
+// TODO: these things need to be properly tested
+// - Test send of all message types
+// - Test attempt to send when not connected
+// - dissconnect() and send() may be called from any callback
+// - Physically removing the device will automatically disconnect()
+
 #include "DreamPicoPortApi.hpp"
 
 #include <cstdio>

@@ -241,26 +241,22 @@ public:
             return false;
         }
 
+        {
+            std::lock_guard<std::mutex> lock(mDisconnectMutex);
+            mDisconnectCallback = fn;
+            mDisconnectReason.clear();
+            mDisconnectReason.shrink_to_fit();
+        }
+
         if (!mLibusbDevice->openInterface())
         {
             return false;
         }
 
-        std::function<void(std::string&)> completeFn;
-
-        if (fn)
-        {
-            completeFn = [this, fn](std::string& errStr){ disconnect(); fn(errStr); };
-        }
-        else
-        {
-            completeFn = [this](std::string& errStr){ disconnect(); };
-        }
-
         if (
             !mLibusbDevice->beginRead(
                 [this](const std::uint8_t* buffer, int len){ handleReceive(buffer, len); },
-                completeFn
+                [this](std::string& errStr){ disconnect(); }
             )
         )
         {
@@ -288,12 +284,17 @@ public:
     //! @return true if disconnection succeeded or was already disconnected
     bool disconnect()
     {
+        bool inThreadContext = false;
+
         // This function may not be called from any callback context (would cause deadlock)
         if (mLibusbDevice->isThisThreadReading())
         {
-            // Signal disconnection so that processing thread begins to join now
-            signalDisconnect();
-            return false;
+            // Disconnect without joining
+            std::lock_guard<std::mutex> lock(mProcessMutex);
+            mProcessing = false;
+            mProcessCv.notify_all();
+            mLibusbDevice->stopRead();
+            return true;
         }
         else
         {
@@ -301,9 +302,11 @@ public:
             std::lock_guard<std::mutex> lock(mProcessMutex);
             if (mProcessThread && mProcessThread->get_id() == std::this_thread::get_id())
             {
-                // Signal disconnection so that processing thread begins to join now
-                signalDisconnect();
-                return false;
+                // Disconnect without joining
+                mProcessing = false;
+                mProcessCv.notify_all();
+                mLibusbDevice->stopRead();
+                return true;
             }
         }
 
@@ -377,6 +380,12 @@ public:
         if (respFn)
         {
             std::lock_guard<std::mutex> lock(mProcessMutex);
+
+            if (!mProcessing)
+            {
+                mLibusbDevice->setExternalError("send called while disconnected");
+                return 0;
+            }
 
             std::chrono::system_clock::time_point expiration =
                 std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs);
@@ -456,14 +465,6 @@ public:
     }
 
 private:
-    //! Signals disconnect without joining
-    void signalDisconnect()
-    {
-        std::lock_guard<std::mutex> lock(mProcessMutex);
-        mProcessing = false;
-        mProcessCv.notify_all();
-    }
-
     //! Handle received data
     //! @param[in] buffer Buffer received from libusb
     //! @param[in] len Number of bytes in buffer received
@@ -764,6 +765,22 @@ private:
         {
             fn(::dpp_api::msg::rx::Msg::kCmdDisconnect, {});
         }
+
+        // Execute disconnection callback
+        std::function<void(std::string& errStr)> disconnectCallback;
+        std::string disconnectReason;
+
+        {
+            std::lock_guard<std::mutex> lock(mDisconnectMutex);
+            disconnectCallback = mDisconnectCallback;
+            disconnectReason = std::move(mDisconnectReason);
+            mDisconnectReason.clear();
+        }
+
+        if (disconnectCallback)
+        {
+            disconnectCallback(disconnectReason);
+        }
     }
 
 private:
@@ -783,6 +800,12 @@ private:
 
     //! True when connected, false when disconnected
     bool mConnected = false;
+    //! The callback to execute when processing thread is exiting
+    std::function<void(std::string& errStr)> mDisconnectCallback;
+    //! The error reason for disconnection
+    std::string mDisconnectReason;
+    //! Serializes access to mDisconnectCallback and mDisconnectReason
+    std::mutex mDisconnectMutex;
     //! True while processing thread should execute
     bool mProcessing = false;
     //! Maps return address to FunctionLookupMapEntry

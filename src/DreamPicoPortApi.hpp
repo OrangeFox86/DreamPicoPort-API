@@ -132,7 +132,7 @@ namespace rx
 struct Msg
 {
     //! One of kCmd* values
-    std::int16_t cmd = (std::numeric_limits<std::int16_t>::min)();
+    std::int16_t cmd = kCmdSendFailure;
 
     //! The cmd response for successful execution
     static constexpr const std::int16_t kCmdSuccess = 0x0A;
@@ -516,8 +516,12 @@ public:
             timeoutMs
         );
 
-        std::unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [&done](){return done;});
+        if (v > 0)
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            cv.wait(lock, [&done](){return done;});
+        }
+
         return result;
     }
 

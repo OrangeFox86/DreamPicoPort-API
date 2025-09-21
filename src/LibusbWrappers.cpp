@@ -289,6 +289,7 @@ bool LibusbDevice::openInterface()
     {
         // Reset and attempt to reconnect
         mLibusbDeviceHandle.reset();
+        mTransferDataMap.clear();
 
         DppDevice::Filter filter;
         filter.idVendor = mDesc->idVendor;
@@ -451,6 +452,7 @@ void LibusbDevice::transferComplete(libusb_transfer* transfer)
 
     bool stallDetected = mRxStalled;
     bool allowNewTransfer = false;
+    bool noDevice = false;
 
     if (mInterfaceClaimed && !mExitRequested)
     {
@@ -496,6 +498,7 @@ void LibusbDevice::transferComplete(libusb_transfer* transfer)
             {
                 mLastLibusbError.saveErrorIfNotSet(LIBUSB_ERROR_IO, "transfer in - couldn't find device");
                 allowNewTransfer = false;
+                noDevice = true;
             }
             break;
 
@@ -543,6 +546,13 @@ void LibusbDevice::transferComplete(libusb_transfer* transfer)
 
         // Erase the transfer from the map which should automatically free the transfer data
         mTransferDataMap.erase(transfer);
+
+        if (noDevice)
+        {
+            // Don't try to recover from stall if there is no device
+            mRxStalled = false;
+            stallDetected = false;
+        }
 
         if (stallDetected)
         {
@@ -764,10 +774,7 @@ bool LibusbDevice::closeInterface()
                 mLastLibusbError.saveError(r, "libusb_release_interface");
                 result = false;
             }
-
         }
-
-
     }
 
     return result;
@@ -795,7 +802,7 @@ std::array<std::uint8_t, 3> LibusbDevice::getVersion() const
 
 void LibusbDevice::setExternalError(const char* where)
 {
-    mLastLibusbError.saveError(LIBUSB_SUCCESS, where);
+    mLastLibusbError.saveErrorIfNotSet(LIBUSB_SUCCESS, where);
 }
 
 int LibusbDevice::getInterfaceNumber()

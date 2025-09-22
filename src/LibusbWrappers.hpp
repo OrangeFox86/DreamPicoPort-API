@@ -248,10 +248,13 @@ public:
     //! @return true if data was successfully sent
     bool send(std::uint8_t* data, int length, unsigned int timeoutMs = 1000);
 
-    //! Starts the asynchronous interface and blocks until disconnect
+    //! Initialize for subsequent run
     //! @param[in] rxFn The function to call when a full packet is received
-    //! @return true if interface was open or opened and read thread was started
-    bool run(const std::function<void(const std::uint8_t*, int)>& rxFn);
+    //! @return true if interface was open or opened and transfers ready for run
+    bool runInit(const std::function<void(const std::uint8_t*, int)>& rxFn);
+
+    //! Starts the asynchronous interface and blocks until disconnect
+    void run();
 
     //! Request stop of the read thread
     void stopRead();
@@ -298,6 +301,11 @@ private:
 
     //! Cancel all transfers
     void cancelTransfers();
+
+    //! Cancel all transfers then do processing loop until all transfers have been deleted
+    //! @return true if all transfers were successfully cleared
+    //! @return false if an error occurred
+    bool clearTransfers();
 
 public:
     //! The serial number of this device

@@ -249,7 +249,7 @@ public:
             mDisconnectReason.shrink_to_fit();
         }
 
-        if (!mLibusbDevice->openInterface())
+        if (!mLibusbDevice->runInit([this](const std::uint8_t* buffer, int len){ handleReceive(buffer, len); }))
         {
             return false;
         }
@@ -261,7 +261,7 @@ public:
         mReadThread = std::make_unique<std::thread>(
             [this]()
             {
-                mLibusbDevice->run([this](const std::uint8_t* buffer, int len){ handleReceive(buffer, len); });
+                mLibusbDevice->run();
 
                 // Save the error description at this point
                 {

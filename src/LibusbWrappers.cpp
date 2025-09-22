@@ -293,6 +293,11 @@ LibusbDevice::~LibusbDevice()
     closeInterface();
 
     // Reset libusb pointers in the correct order
+    if (!clearTransfers())
+    {
+        // This will likely cause an exception, but there is nothing else that can be done
+        mTransferDataMap.clear();
+    }
     mLibusbDeviceHandle.reset();
     mLibusbContext.reset();
 }
@@ -640,23 +645,27 @@ bool LibusbDevice::createTransfers()
 
     if (!success)
     {
-        // Need to process until transfers are fully canceled
-        cancelTransfers();
-        while (!mTransferDataMap.empty())
-        {
-            int r = libusb_handle_events(mLibusbContext.get());
-            if (r < 0)
-            {
-                break;
-            }
-        }
+        // This will block until all transfers are cleared by the libusb state machine
+        clearTransfers();
     }
 
     return success;
 }
 
-bool LibusbDevice::run(const std::function<void(const std::uint8_t*, int)>& rxFn)
+bool LibusbDevice::runInit(const std::function<void(const std::uint8_t*, int)>& rxFn)
 {
+    if (!openInterface())
+    {
+        return false;
+    }
+
+    // Ensure there are no hanging transfers left in the libusb state machine
+    if (!clearTransfers())
+    {
+        return false;
+    }
+
+    // Create all new transfers
     if (!createTransfers())
     {
         return false;
@@ -666,6 +675,12 @@ bool LibusbDevice::run(const std::function<void(const std::uint8_t*, int)>& rxFn
     mRxStalled = false;
     mRxFn = rxFn;
 
+    // Ready!
+    return true;
+}
+
+void LibusbDevice::run()
+{
     while (mInterfaceClaimed && !mExitRequested)
     {
         if (mRxStalled && mTransferDataMap.empty())
@@ -701,20 +716,8 @@ bool LibusbDevice::run(const std::function<void(const std::uint8_t*, int)>& rxFn
         }
     }
 
-    // It's necessary to continue to handle events until all transfers are completed
-    cancelTransfers();
-    while (!mTransferDataMap.empty())
-    {
-        int r = libusb_handle_events(mLibusbContext.get());
-        if (r < 0)
-        {
-            mLastLibusbError.saveError(r, "libusb_handle_events");
-            mExitRequested = true;
-            break;
-        }
-    }
-
-    return true;
+    // This will block until all transfers are cleared by the libusb state machine
+    clearTransfers();
 }
 
 void LibusbDevice::stopRead()
@@ -736,6 +739,23 @@ void LibusbDevice::cancelTransfers()
     {
         libusb_cancel_transfer(pair.second->transfer.get());
     }
+}
+
+bool LibusbDevice::clearTransfers()
+{
+    cancelTransfers();
+
+    // Need to process until transfers are fully canceled
+    while (!mTransferDataMap.empty())
+    {
+        int r = libusb_handle_events(mLibusbContext.get());
+        if (r < 0)
+        {
+            mLastLibusbError.saveErrorIfNotSet(r, "libusb_handle_events while trying to clear transfers");
+            return false;
+        }
+    }
+    return true;
 }
 
 bool LibusbDevice::closeInterface()

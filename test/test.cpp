@@ -138,7 +138,7 @@ void summary_response(dpp_api::msg::rx::GetDcSummary& msg)
         printf("Response received; cmd: %02hhx\n", static_cast<std::uint8_t>(msg.cmd));
         printf("{");
         bool outerFirst = true;
-        for (const std::list<std::array<uint32_t, 2>>& periph : msg.summary)
+        for (const std::vector<std::array<uint32_t, 2>>& periph : msg.summary)
         {
             if (!outerFirst)
             {
@@ -573,7 +573,7 @@ int main(int argc, char **argv)
         printf("Time elapsed: %lld ms\n", static_cast<long long>(duration.count()));
 
         // Test a synchronous command
-        dpp_api::msg::rx::GetControllerState st = dppDevice->send(dpp_api::msg::tx::GetControllerState{0}, 500);
+        dpp_api::msg::rx::GetControllerState st = dppDevice->sendSync(dpp_api::msg::tx::GetControllerState{0}, 500);
         controller_state_response(st);
 
         // Sleep to test for physical disconnect detection

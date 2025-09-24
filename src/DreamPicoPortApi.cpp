@@ -964,7 +964,7 @@ void msg::rx::GetDcSummary::set(std::int16_t cmd, std::vector<std::uint8_t>& pay
     std::size_t pidx = 0;
     while (pidx < payload.size())
     {
-        std::list<std::array<uint32_t, 2>> currentPeriph;
+        std::vector<std::array<uint32_t, 2>> currentPeriph;
         std::array<std::uint32_t, 2> arr;
         std::size_t aidx = 0;
         // Pipe means that 4-byte function data should follow (should be in pairs)
@@ -989,6 +989,7 @@ void msg::rx::GetDcSummary::set(std::int16_t cmd, std::vector<std::uint8_t>& pay
         }
 
         // Add the accumulated peripheral data
+        currentPeriph.shrink_to_fit();
         summary.push_back(std::move(currentPeriph));
 
         if (pidx < payload.size())
@@ -997,6 +998,8 @@ void msg::rx::GetDcSummary::set(std::int16_t cmd, std::vector<std::uint8_t>& pay
             ++pidx;
         }
     }
+
+    summary.shrink_to_fit();
 }
 
 std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::GetInterfaceVersion::get() const

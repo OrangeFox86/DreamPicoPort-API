@@ -195,10 +195,10 @@ struct ChangePlayerDisplay : Msg
 struct GetDcSummary : Msg
 {
     //! When cmd is kCmdSuccess, this contains peripheral summary data
-    //! - Each element in the outer list represents a peripheral in order (first is main)
-    //! - Each element in the inner list represents function definition (max of 3)
+    //! - Each element in the outer vector represents a peripheral in order (first is main)
+    //! - Each element in the inner vector represents function definition (max of 3)
     //! - First array element is function code, second is function definition word
-    std::list<std::list<std::array<uint32_t, 2>>> summary;
+    std::vector<std::vector<std::array<uint32_t, 2>>> summary;
 
     //! Internally called to set data based on received payload
     //! @param[in] cmd The received command
@@ -452,7 +452,7 @@ public:
     std::uint64_t send(
         std::uint8_t cmd,
         const std::vector<std::uint8_t>& payload,
-        const std::function<void(std::int16_t cmd, std::vector<std::uint8_t>& payload)>& respFn,
+        const std::function<void(std::int16_t cmd, std::vector<std::uint8_t>& payload)>& respFn = nullptr,
         std::uint32_t timeoutMs = 1000
     );
 
@@ -467,7 +467,7 @@ public:
     template <typename T>
     std::uint64_t send(
         const T& tx,
-        const std::function<void(typename T::ResponseType&)>& respFn,
+        const std::function<void(typename T::ResponseType&)>& respFn = nullptr,
         std::uint32_t timeoutMs = 1000
     )
     {
@@ -499,7 +499,7 @@ public:
     //! @param[in] timeoutMs The maximum amount of time to block before receiving a response
     //! @return the resulting data
     template <typename T>
-    typename T::ResponseType send(const T& tx, std::uint32_t timeoutMs = 1000)
+    typename T::ResponseType sendSync(const T& tx, std::uint32_t timeoutMs = 1000)
     {
         std::mutex mutex;
         std::condition_variable cv;

@@ -504,7 +504,7 @@ public:
         std::mutex mutex;
         std::condition_variable cv;
         bool done = false;
-        T::ResponseType result;
+        typename T::ResponseType result;
 
         std::uint64_t v = send(
             tx,

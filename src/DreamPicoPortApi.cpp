@@ -727,9 +727,10 @@ private:
                 }
 
                 // Execute send failure functions
-                for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : sendFailureFns)
+                for (const std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>& fn : sendFailureFns)
                 {
-                    fn(::dpp_api::msg::rx::Msg::kCmdSendFailure, {});
+                    std::vector<std::uint8_t> tmpEmpty;
+                    fn(::dpp_api::msg::rx::Msg::kCmdSendFailure, tmpEmpty);
                 }
             }
 
@@ -745,9 +746,10 @@ private:
             }
 
             // Execute for timeout
-            for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : timeoutFns)
+            for (const std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>& fn : timeoutFns)
             {
-                fn(::dpp_api::msg::rx::Msg::kCmdTimeout, {});
+                std::vector<std::uint8_t> tmpEmpty;
+                fn(::dpp_api::msg::rx::Msg::kCmdTimeout, tmpEmpty);
             }
         }
 
@@ -767,9 +769,10 @@ private:
         }
 
         // Execute for disconnect
-        for (const std::function<void(std::int16_t cmd, const std::vector<std::uint8_t>)>& fn : disconnectFns)
+        for (const std::function<void(std::int16_t cmd, std::vector<std::uint8_t>&)>& fn : disconnectFns)
         {
-            fn(::dpp_api::msg::rx::Msg::kCmdDisconnect, {});
+            std::vector<std::uint8_t> tmpEmpty;
+            fn(::dpp_api::msg::rx::Msg::kCmdDisconnect, tmpEmpty);
         }
 
         // Execute disconnection callback

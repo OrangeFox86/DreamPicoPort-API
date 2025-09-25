@@ -47,7 +47,9 @@ class DreamPicoPortConan(ConanFile):
         # This generates "conan_toolchain.cmake" in self.generators_folder
         tc = CMakeToolchain(self)
 
-        tc.variables["DREAM_PICO_PORT_CONAN_BUILD"] = True
+        tc.variables["DREAMPICOPORT_USE_EXTERNAL_LIBUSB"] = True
+        tc.variables["DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME"] = "libusb"
+        tc.variables["DREAMPICOPORT_LIBUSB_LIBRARY_NAME"] = "libusb::libusb"
         tc.variables["DREAMPICOPORT_API_BUILD_SHARED_LIBS"] = bool(self.options.get_safe("shared", False))
         tc.variables["DREAMPICOPORT_TESTS"] = bool(self.options.get_safe("tests", False))
 

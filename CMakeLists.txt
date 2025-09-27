@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(dream_pico_port_api)
+project(dream_pico_port_api
+    DESCRIPTION "API for DreamPicoPort hardware"
+    VERSION "1.0.0"
+    LANGUAGES CXX
+)
 
 # Currently when this is disabled, the underlying API will be stubbed out
 # In the future, the serial interface could be used instead

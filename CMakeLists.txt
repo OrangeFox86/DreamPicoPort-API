@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 project(dream_pico_port_api)
 
 set(DREAMPICOPORT_LIBUSB_LIBRARY_NAME "usb-1.0" CACHE STRING "Name of the libusb library to link against")
-option(DREAMPICOPORT_USE_EXTERNAL_LIBUSB "Use a libusb package included by the parent cmake file" OFF)
+option(DREAMPICOPORT_USE_EXTERNAL_LIBUSB "Locate libusb using find_package" OFF)
 set(DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME "libusb" CACHE STRING "Name of the external libusb project when DREAMPICOPORT_USE_EXTERNAL_LIBUSB is true")
 option(DREAMPICOPORT_API_BUILD_SHARED_LIBS "Build Shared Libraries for DreamPicoPort-API" OFF)
 option(DREAMPICOPORT_TESTS "Build tests executable for DreamPicoPort" OFF)

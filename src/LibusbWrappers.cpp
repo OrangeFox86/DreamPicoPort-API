@@ -20,6 +20,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#ifndef DREAMPICOPORT_NO_LIBUSB
+
 #include "LibusbWrappers.hpp"
 
 #include <libusb.h>
@@ -846,3 +848,5 @@ std::uint8_t LibusbDevice::getEpOut()
 }
 
 } // namespace dpp_api
+
+#endif // DREAMPICOPORT_NO_LIBUSB

@@ -137,6 +137,7 @@ static std::uint16_t computeCrc16(const void* buffer, std::uint16_t bufLen)
 }
 
 
+#ifndef DREAMPICOPORT_NO_LIBUSB
 //! This class hides implementation details to simplify the public interface.
 class DppDeviceImp
 {
@@ -145,54 +146,6 @@ public:
     ~DppDeviceImp()
     {
         disconnect();
-    }
-
-    //! Packs a packet structure into a vector
-    //! @param[in] addr The return address
-    //! @param[in] cmd The command to set
-    //! @param[in] payload The payload for the command
-    //! @return the packed data
-    static std::vector<std::uint8_t> pack(
-        std::uint64_t addr,
-        std::uint8_t cmd,
-        const std::vector<std::uint8_t>& payload
-    )
-    {
-        // Create address bytes
-        std::vector<std::uint8_t> addrBytes;
-        addrBytes.reserve(kMaxSizeAddress);
-        std::int8_t idx = 0;
-        while (addr > 0 || idx == 0)
-        {
-            const uint8_t orMask = (idx < (kMaxSizeAddress - 1)) ? ((addr > 0x7F) ? 0x80 : 0x00) : 0x00;
-            const uint8_t shift = (idx < (kMaxSizeAddress - 1)) ? 7 : 8;
-            addrBytes.push_back(static_cast<std::uint8_t>(addr & 0xFF) | orMask);
-            addr >>= shift;
-            ++idx;
-        }
-
-        // Create size bytes
-        const std::uint16_t size =
-            static_cast<std::uint16_t>(addrBytes.size() + kSizeCommand + payload.size() + kSizeCrc);
-        const std::uint16_t invSize = 0xFFFF ^ size;
-        std::uint8_t sizeBytes[kSizeSize];
-        uint16ToBytes(&sizeBytes[0], size);
-        uint16ToBytes(&sizeBytes[2], invSize);
-
-        // Pack the data
-        std::vector<std::uint8_t> data;
-        data.reserve(kSizeMagic + kSizeSize + addrBytes.size() + kSizeCommand + payload.size() + kSizeCrc);
-        data.insert(data.end(), kMagicSequence, kMagicSequence + kSizeMagic);
-        data.insert(data.end(), sizeBytes, sizeBytes + kSizeSize);
-        data.insert(data.end(), addrBytes.begin(), addrBytes.end());
-        data.push_back(cmd);
-        data.insert(data.end(), payload.begin(), payload.end());
-        const std::uint16_t crc = computeCrc16(&data[kSizeMagic + kSizeSize], data.size() - kSizeMagic - kSizeSize);
-        std::uint8_t crcBytes[kSizeCrc];
-        uint16ToBytes(crcBytes, crc);
-        data.insert(data.end(), crcBytes, crcBytes + kSizeCrc);
-
-        return data;
     }
 
     //! Sends data on the vendor interface
@@ -473,6 +426,54 @@ public:
     }
 
 private:
+    //! Packs a packet structure into a vector
+    //! @param[in] addr The return address
+    //! @param[in] cmd The command to set
+    //! @param[in] payload The payload for the command
+    //! @return the packed data
+    static std::vector<std::uint8_t> pack(
+        std::uint64_t addr,
+        std::uint8_t cmd,
+        const std::vector<std::uint8_t>& payload
+    )
+    {
+        // Create address bytes
+        std::vector<std::uint8_t> addrBytes;
+        addrBytes.reserve(kMaxSizeAddress);
+        std::int8_t idx = 0;
+        while (addr > 0 || idx == 0)
+        {
+            const uint8_t orMask = (idx < (kMaxSizeAddress - 1)) ? ((addr > 0x7F) ? 0x80 : 0x00) : 0x00;
+            const uint8_t shift = (idx < (kMaxSizeAddress - 1)) ? 7 : 8;
+            addrBytes.push_back(static_cast<std::uint8_t>(addr & 0xFF) | orMask);
+            addr >>= shift;
+            ++idx;
+        }
+
+        // Create size bytes
+        const std::uint16_t size =
+            static_cast<std::uint16_t>(addrBytes.size() + kSizeCommand + payload.size() + kSizeCrc);
+        const std::uint16_t invSize = 0xFFFF ^ size;
+        std::uint8_t sizeBytes[kSizeSize];
+        uint16ToBytes(&sizeBytes[0], size);
+        uint16ToBytes(&sizeBytes[2], invSize);
+
+        // Pack the data
+        std::vector<std::uint8_t> data;
+        data.reserve(kSizeMagic + kSizeSize + addrBytes.size() + kSizeCommand + payload.size() + kSizeCrc);
+        data.insert(data.end(), kMagicSequence, kMagicSequence + kSizeMagic);
+        data.insert(data.end(), sizeBytes, sizeBytes + kSizeSize);
+        data.insert(data.end(), addrBytes.begin(), addrBytes.end());
+        data.push_back(cmd);
+        data.insert(data.end(), payload.begin(), payload.end());
+        const std::uint16_t crc = computeCrc16(&data[kSizeMagic + kSizeSize], data.size() - kSizeMagic - kSizeSize);
+        std::uint8_t crcBytes[kSizeCrc];
+        uint16ToBytes(crcBytes, crc);
+        data.insert(data.end(), crcBytes, crcBytes + kSizeCrc);
+
+        return data;
+    }
+
     //! Handle received data
     //! @param[in] buffer Buffer received from libusb
     //! @param[in] len Number of bytes in buffer received
@@ -871,6 +872,108 @@ private:
 // (essentially, 4 byte max for address length at 7 bits of data per byte)
 std::uint64_t DppDeviceImp::mMaxAddr = 0x0FFFFFFF;
 
+#else
+
+// In the future, the serial interface may be used. For now, no support. This is just a stub.
+class DppDeviceImp
+{
+public:
+    DppDeviceImp() = default;
+    ~DppDeviceImp() = default;
+
+    bool send(
+        std::uint64_t addr,
+        std::uint8_t cmd,
+        const std::vector<std::uint8_t>& payload,
+        unsigned int timeoutMs = 1000
+    )
+    {
+        static_cast<void>(addr);
+        static_cast<void>(cmd);
+        static_cast<void>(payload);
+        static_cast<void>(timeoutMs);
+        return false;
+    }
+
+    bool connect(const std::function<void(std::string& errStr)>& fn)
+    {
+        static_cast<void>(fn);
+        return false;
+    }
+
+    bool disconnect()
+    {
+        return true;
+    }
+
+    bool isConnected()
+    {
+        return false;
+    }
+
+    std::uint64_t send(
+        std::uint8_t cmd,
+        const std::vector<std::uint8_t>& payload,
+        const std::function<void(std::int16_t cmd, std::vector<std::uint8_t>& payload)>& respFn,
+        std::uint32_t timeoutMs
+    )
+    {
+        static_cast<void>(cmd);
+        static_cast<void>(payload);
+        static_cast<void>(respFn);
+        static_cast<void>(timeoutMs);
+        return 0;
+    }
+
+    static void setMaxAddr(std::uint64_t maxAddr)
+    {
+        static_cast<void>(maxAddr);
+    }
+
+    const std::string& getSerial() const
+    {
+        const static std::string tmpStr;
+        return tmpStr;
+    }
+
+    std::array<std::uint8_t, 3> getVersion() const
+    {
+        return std::array<std::uint8_t, 3>();
+    }
+
+    std::string getLastErrorStr()
+    {
+        return std::string();
+    }
+
+    std::size_t getNumWaiting()
+    {
+        return 0;
+    }
+
+    void setExternalError(const char* where)
+    {
+        static_cast<void>(where);
+    }
+
+    int getInterfaceNumber()
+    {
+        return -1;
+    }
+
+    std::uint8_t getEpIn()
+    {
+        return 255;
+    }
+
+    std::uint8_t getEpOut()
+    {
+        return 255;
+    }
+};
+
+#endif // DREAMPICOPORT_NO_LIBUSB
+
 
 //
 // Message tx and rx definitions
@@ -1136,6 +1239,7 @@ DppDevice::~DppDevice()
 
 std::unique_ptr<DppDevice> DppDevice::find(const Filter& filter)
 {
+#ifndef DREAMPICOPORT_NO_LIBUSB
     std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext = make_libusb_context();
 
     FindResult foundDevice = find_dpp_device(libusbContext, filter);
@@ -1159,10 +1263,15 @@ std::unique_ptr<DppDevice> DppDevice::find(const Filter& filter)
             )
         )
     );
+#else
+    // In the future, the serial interface may be used. For now, no support.
+    return nullptr;
+#endif
 }
 
 std::uint32_t DppDevice::getCount(const Filter& filter)
 {
+#ifndef DREAMPICOPORT_NO_LIBUSB
     std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext = make_libusb_context();
 
     Filter filterCpy = filter;
@@ -1170,6 +1279,9 @@ std::uint32_t DppDevice::getCount(const Filter& filter)
     FindResult foundDevice = find_dpp_device(libusbContext, filterCpy);
 
     return foundDevice.count;
+#else
+    return 0;
+#endif
 }
 
 void DppDevice::setMaxAddr(std::uint64_t maxAddr)

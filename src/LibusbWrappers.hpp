@@ -23,6 +23,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#ifndef DREAMPICOPORT_NO_LIBUSB
+
 #include <libusb.h>
 
 #include "DreamPicoPortApi.hpp"
@@ -349,5 +351,7 @@ private:
 }; // class LibusbDevice
 
 } // namespace dpp_api
+
+#endif // DREAMPICOPORT_NO_LIBUSB
 
 #endif // __DREAM_PICO_PORT_LIBUSB_WRAPPERS_HPP__

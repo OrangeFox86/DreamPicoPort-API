@@ -2,26 +2,32 @@ cmake_minimum_required(VERSION 3.16)
 
 project(dream_pico_port_api)
 
-set(DREAMPICOPORT_LIBUSB_LIBRARIES "usb-1.0" CACHE STRING "Name of the libusb library to link against")
-set(DREAMPICOPORT_LIBUSB_INCLUDE_DIRS "" CACHE STRING "Path to libusb include directory, when applicable")
-option(DREAMPICOPORT_USE_EXTERNAL_LIBUSB "Locate libusb using find_package" OFF)
-set(DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME "libusb" CACHE STRING "Name of the external libusb project when DREAMPICOPORT_USE_EXTERNAL_LIBUSB is true")
-option(DREAMPICOPORT_API_BUILD_SHARED_LIBS "Build Shared Libraries for DreamPicoPort-API" OFF)
-option(DREAMPICOPORT_TESTS "Build tests executable for DreamPicoPort" OFF)
+# Currently when this is disabled, the underlying API will be stubbed out
+# In the future, the serial interface could be used instead
+option(DREAMPICOPORT_WITH_LIBUSB "Use libusb to access DreamPicoPort-API" ON)
 
-if (DREAMPICOPORT_USE_EXTERNAL_LIBUSB)
-    # Use external build of libusb
-    find_package(${DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME} REQUIRED)
-    message(STATUS "${DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME}: ${${DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME}_DIR}")
-else()
-    # Build from a local libusb
-    option(DREAMPICOPORT_ADD_LIBUSB "Add internal libusb library" ON)
+if (DREAMPICOPORT_WITH_LIBUSB)
+    set(DREAMPICOPORT_LIBUSB_LIBRARIES "usb-1.0" CACHE STRING "Name of the libusb library to link against")
+    set(DREAMPICOPORT_LIBUSB_INCLUDE_DIRS "" CACHE STRING "Path to libusb include directory, when applicable")
+    option(DREAMPICOPORT_USE_EXTERNAL_LIBUSB "Locate libusb using find_package" OFF)
+    set(DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME "libusb" CACHE STRING "Name of the external libusb project when DREAMPICOPORT_USE_EXTERNAL_LIBUSB is true")
+    option(DREAMPICOPORT_API_BUILD_SHARED_LIBS "Build Shared Libraries for DreamPicoPort-API" OFF)
+    option(DREAMPICOPORT_TESTS "Build tests executable for DreamPicoPort" OFF)
 
-    if(DREAMPICOPORT_ADD_LIBUSB)
-        option(LIBUSB_BUILD_SHARED_LIBS ${DREAMPICOPORT_API_BUILD_SHARED_LIBS})
-        add_subdirectory("ext/libusb-cmake/")
+    if (DREAMPICOPORT_USE_EXTERNAL_LIBUSB)
+        # Use external build of libusb
+        find_package(${DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME} REQUIRED)
+        message(STATUS "${DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME}: ${${DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME}_DIR}")
     else()
-        message(STATUS "Skipping include of cmake-libusb")
+        # Build from a local libusb
+        option(DREAMPICOPORT_ADD_LIBUSB "Add internal libusb library" ON)
+
+        if(DREAMPICOPORT_ADD_LIBUSB)
+            option(LIBUSB_BUILD_SHARED_LIBS ${DREAMPICOPORT_API_BUILD_SHARED_LIBS})
+            add_subdirectory("ext/libusb-cmake/")
+        else()
+            message(STATUS "Skipping include of cmake-libusb")
+        endif()
     endif()
 endif()
 

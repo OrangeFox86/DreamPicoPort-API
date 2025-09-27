@@ -18,15 +18,22 @@ else()
   add_library(dream_pico_port_api STATIC ${SRC})
 endif()
 
-target_link_libraries(dream_pico_port_api
-  PRIVATE
-    ${DREAMPICOPORT_LIBUSB_LIBRARIES}
-)
+if (DREAMPICOPORT_WITH_LIBUSB)
+  target_link_libraries(dream_pico_port_api
+    PRIVATE
+      ${DREAMPICOPORT_LIBUSB_LIBRARIES}
+  )
 
-target_include_directories(dream_pico_port_api
-  PRIVATE
-    ${DREAMPICOPORT_LIBUSB_INCLUDE_DIRS}
-)
+  target_include_directories(dream_pico_port_api
+    PRIVATE
+      ${DREAMPICOPORT_LIBUSB_INCLUDE_DIRS}
+  )
+
+else()
+
+  target_compile_definitions(dream_pico_port_api PRIVATE DREAMPICOPORT_NO_LIBUSB)
+
+endif()
 
 # For the most part, this lib is C++11 compatible, but std::make_unique() is used which is C++14
 # I'm choosing C++17 just because C++14 was less adopted so may as well go to the next notch

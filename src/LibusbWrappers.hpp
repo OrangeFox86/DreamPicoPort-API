@@ -198,8 +198,9 @@ private:
 
 struct FindResult
 {
-    std::unique_ptr<libusb_device_descriptor> dev;
-    std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> devHandle;
+    std::unique_ptr<libusb_device_descriptor> desc;
+    // This is essentially unique, but also retained as a weak_ptr locally for comparison logic only
+    std::shared_ptr<libusb_device_handle> devHandle;
     std::string serial;
     std::int32_t count;
 };
@@ -231,7 +232,7 @@ public:
         const std::string& serial,
         std::unique_ptr<libusb_device_descriptor>&& desc,
         std::unique_ptr<libusb_context, LibusbContextDeleter>&& libusbContext,
-        std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter>&& libusbDeviceHandle
+        std::shared_ptr<libusb_device_handle>&& libusbDeviceHandle
     );
 
     //! Destructor
@@ -325,7 +326,7 @@ private:
     //! Serializes access to mTransferDataMap
     std::recursive_mutex mTransferDataMapMutex;
     //! Pointer to the libusb device handle
-    std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter> mLibusbDeviceHandle;
+    std::shared_ptr<libusb_device_handle> mLibusbDeviceHandle;
     //! True when interface is claimed
     bool mInterfaceClaimed = false;
     //! Set to true when read thread starts, set to false to cause read thread to exit

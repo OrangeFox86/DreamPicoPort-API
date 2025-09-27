@@ -200,6 +200,18 @@ const char* LibusbError::getLibusbErrorStr(int libusbError)
     }
 }
 
+//! Holds a previously found entry
+struct KnownEntry
+{
+    //! The previously returned device handle
+    std::weak_ptr<libusb_device_handle> devHandle;
+    //! Matching filter data (idx should be ignored)
+    DppDevice::Filter matchingFilter;
+};
+
+//! List of previously returned items on find_dpp_device
+static std::list<KnownEntry> gPrevReturnedItems;
+
 FindResult find_dpp_device(
     const std::unique_ptr<libusb_context, LibusbContextDeleter>& libusbContext,
     const DppDevice::Filter& filter
@@ -253,7 +265,7 @@ FindResult find_dpp_device(
                     {
                         return FindResult{
                             std::move(desc),
-                            std::move(deviceHandle),
+                            std::shared_ptr<libusb_device_handle>(deviceHandle.release(), LibusbDeviceHandleDeleter{}),
                             std::move(deviceSerial),
                             currentIndex + 1
                         };
@@ -279,7 +291,7 @@ LibusbDevice::LibusbDevice(
     const std::string& serial,
     std::unique_ptr<libusb_device_descriptor>&& desc,
     std::unique_ptr<libusb_context, LibusbContextDeleter>&& libusbContext,
-    std::unique_ptr<libusb_device_handle, LibusbDeviceHandleDeleter>&& libusbDeviceHandle
+    std::shared_ptr<libusb_device_handle>&& libusbDeviceHandle
 ) :
     mSerial(serial),
     mDesc(std::move(desc)),
@@ -323,13 +335,13 @@ bool LibusbDevice::openInterface()
         filter.maxBcdDevice = mDesc->bcdDevice;
         filter.serial = mSerial;
         FindResult foundDevice = find_dpp_device(mLibusbContext, filter);
-        if (!foundDevice.dev || !foundDevice.devHandle)
+        if (!foundDevice.desc || !foundDevice.devHandle)
         {
             mLastLibusbError.saveError(LIBUSB_ERROR_NO_DEVICE, "find_dpp_device");
             return false;
         }
 
-        mDesc = std::move(foundDevice.dev);
+        mDesc = std::move(foundDevice.desc);
         mLibusbDeviceHandle = std::move(foundDevice.devHandle);
     }
 

@@ -383,7 +383,6 @@ public:
 
         std::vector<std::uint8_t> packedData = pack(addr, cmd, payload);
 
-        if (respFn)
         {
             std::lock_guard<std::mutex> lock(mProcessMutex);
 
@@ -393,14 +392,17 @@ public:
                 return 0;
             }
 
-            std::chrono::system_clock::time_point expiration =
-                std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs);
+            if (respFn)
+            {
+                std::chrono::system_clock::time_point expiration =
+                    std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs);
 
-            FunctionLookupMapEntry entry;
-            entry.callback = respFn;
-            entry.timeoutMapIter = mTimeoutLookup.insert(std::make_pair(expiration, addr));
+                FunctionLookupMapEntry entry;
+                entry.callback = respFn;
+                entry.timeoutMapIter = mTimeoutLookup.insert(std::make_pair(expiration, addr));
 
-            mFnLookup[addr] = std::move(entry);
+                mFnLookup[addr] = std::move(entry);
+            }
 
             mOutgoingData.push_back({addr, std::move(packedData)});
 
@@ -1137,7 +1139,7 @@ std::unique_ptr<DppDevice> DppDevice::find(const Filter& filter)
     std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext = make_libusb_context();
 
     FindResult foundDevice = find_dpp_device(libusbContext, filter);
-    if (!foundDevice.dev || !foundDevice.devHandle)
+    if (!foundDevice.desc || !foundDevice.devHandle)
     {
         return nullptr;
     }
@@ -1151,7 +1153,7 @@ std::unique_ptr<DppDevice> DppDevice::find(const Filter& filter)
         std::make_unique<DppDeviceImp>(
             std::make_unique<LibusbDevice>(
                 foundDevice.serial,
-                std::move(foundDevice.dev),
+                std::move(foundDevice.desc),
                 std::move(libusbContext),
                 std::move(foundDevice.devHandle)
             )

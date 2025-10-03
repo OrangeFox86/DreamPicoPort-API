@@ -372,7 +372,7 @@ struct GetConnectedGamepads
 class DREAM_PICO_PORT_API DppDevice
 {
 private:
-    //! Cpnstructor
+    //! Constructor
     //! @param dev Pointer to internal implementation
     DppDevice(std::unique_ptr<class DppDeviceImp>&& dev);
 

@@ -24,7 +24,6 @@
 #include "DppDeviceImp.hpp"
 #ifndef DREAMPICOPORT_NO_LIBUSB
     #include "DppLibusbDeviceImp.hpp"
-    #include "LibusbWrappers.hpp"
 #else
 #ifdef _WIN32
     // Include WinRT headers for UWP
@@ -313,11 +312,13 @@ DppDevice::~DppDevice()
 
 std::unique_ptr<DppDevice> DppDevice::find(const Filter& filter)
 {
-#ifndef DREAMPICOPORT_NO_LIBUSB
-    std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext = make_libusb_context();
+    std::unique_ptr<DppDeviceImp> dppDeviceImp;
 
-    FindResult foundDevice = find_dpp_device(libusbContext, filter);
-    if (!foundDevice.desc || !foundDevice.devHandle)
+#ifndef DREAMPICOPORT_NO_LIBUSB
+    dppDeviceImp = DppLibusbDeviceImp::find(filter);
+#endif
+
+    if (!dppDeviceImp)
     {
         return nullptr;
     }
@@ -327,32 +328,13 @@ std::unique_ptr<DppDevice> DppDevice::find(const Filter& filter)
         DppDeviceFactory(std::unique_ptr<class DppDeviceImp>&& dev) : DppDevice(std::move(dev)) {}
     };
 
-    return std::make_unique<DppDeviceFactory>(
-        std::make_unique<DppLibUsbDeviceImp>(
-            std::make_unique<LibusbDevice>(
-                foundDevice.serial,
-                std::move(foundDevice.desc),
-                std::move(libusbContext),
-                std::move(foundDevice.devHandle)
-            )
-        )
-    );
-#else
-    // In the future, the serial interface may be used. For now, no support.
-    return nullptr;
-#endif
+    return std::make_unique<DppDeviceFactory>(std::move(dppDeviceImp));
 }
 
 std::uint32_t DppDevice::getCount(const Filter& filter)
 {
 #ifndef DREAMPICOPORT_NO_LIBUSB
-    std::unique_ptr<libusb_context, LibusbContextDeleter> libusbContext = make_libusb_context();
-
-    Filter filterCpy = filter;
-    filterCpy.idx = (std::numeric_limits<std::int32_t>::max)();
-    FindResult foundDevice = find_dpp_device(libusbContext, filterCpy);
-
-    return foundDevice.count;
+    return DppLibusbDeviceImp::getCount(filter);
 #else
     return 0;
 #endif

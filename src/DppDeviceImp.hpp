@@ -40,7 +40,11 @@ namespace dpp_api
 class DppDeviceImp
 {
 public:
+    //! Constructor
     DppDeviceImp() = default;
+
+    //! Virtual destructor
+    //! @note the child should call disconnect() within its destructor
     virtual ~DppDeviceImp() = default;
 
     //! Connect to the device and start operation threads. If already connected, disconnect before reconnecting.
@@ -91,7 +95,7 @@ public:
     virtual std::array<std::uint8_t, 3> getVersion() const = 0;
 
     //! @return string representation of last error
-    virtual std::string getLastErrorStr() = 0;
+    virtual std::string getLastErrorStr() const = 0;
 
     //! @return number of waiting responses
     std::size_t getNumWaiting();
@@ -102,13 +106,13 @@ public:
 
     //! Retrieve the currently connected interface number (first VENDOR interface)
     //! @return the connected interface number
-    virtual int getInterfaceNumber() = 0;
+    virtual int getInterfaceNumber() const = 0;
 
     //! @return the currently used IN endpoint
-    virtual std::uint8_t getEpIn() = 0;
+    virtual std::uint8_t getEpIn() const = 0;
 
     //! @return the currently used OUT endpoint
-    virtual std::uint8_t getEpOut() = 0;
+    virtual std::uint8_t getEpOut() const = 0;
 
     //! Converts 2 bytes in network order to a uint16 value in host order
     //! @param[in] payload Pointer to the beginning of the 2-byte sequence

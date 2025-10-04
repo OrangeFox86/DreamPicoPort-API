@@ -28,29 +28,20 @@
 #include <vector>
 #include <cstdint>
 #include <functional>
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
+#include <map>
 
 namespace dpp_api
 {
 
-//! Interface class for specific DPP implementation
+//! Base class for specific DPP implementation
 class DppDeviceImp
 {
 public:
     DppDeviceImp() = default;
     virtual ~DppDeviceImp() = default;
-
-    //! Sends data on the vendor interface
-    //! @param[in] addr The return address
-    //! @param[in] cmd The command to set
-    //! @param[in] payload The payload for the command
-    //! @param[in] timeoutMs Send timeout in milliseconds
-    //! @return true if data was successfully sent
-    virtual bool send(
-        std::uint64_t addr,
-        std::uint8_t cmd,
-        const std::vector<std::uint8_t>& payload,
-        unsigned int timeoutMs = 1000
-    ) = 0;
 
     //! Connect to the device and start operation threads. If already connected, disconnect before reconnecting.
     //! @param[in] fn When true is returned, this is the function that will execute when the device is disconnected
@@ -58,15 +49,15 @@ public:
     //!               NOTICE: Any attempt to call connect() within any callback function will always fail
     //! @return false on failure and getLastErrorStr() will return error description
     //! @return true if connection succeeded
-    virtual bool connect(const std::function<void(std::string& errStr)>& fn) = 0;
+    bool connect(const std::function<void(std::string& errStr)>& fn);
 
     //! Disconnect from the previously connected device and stop all threads
     //! @return false on failure and getLastErrorStr() will return error description
     //! @return true if disconnection succeeded or was already disconnected
-    virtual bool disconnect() = 0;
+    bool disconnect();
 
     //! @return true iff currently connected
-    virtual bool isConnected() = 0;
+    bool isConnected();
 
     //! Send a raw command to DreamPicoPort
     //! @param[in] cmd Raw DreamPicoPort command
@@ -78,12 +69,12 @@ public:
     //! @param[in] timeoutMs Duration to wait before timeout
     //! @return 0 if send failed and getLastErrorStr() will return error description
     //! @return the ID of the sent data
-    virtual std::uint64_t send(
+    std::uint64_t send(
         std::uint8_t cmd,
         const std::vector<std::uint8_t>& payload,
         const std::function<void(std::int16_t cmd, std::vector<std::uint8_t>& payload)>& respFn,
         std::uint32_t timeoutMs
-    ) = 0;
+    );
 
     //! Sets the maximum return address value used to tag each command
     //! @note the minimum maximum is 0x0FFFFFFF to ensure proper execution
@@ -103,7 +94,7 @@ public:
     virtual std::string getLastErrorStr() = 0;
 
     //! @return number of waiting responses
-    virtual std::size_t getNumWaiting() = 0;
+    std::size_t getNumWaiting();
 
     //! Set an error which occurs externally
     //! @param[in] where Explanation of where the error occurred
@@ -203,6 +194,49 @@ public:
     }
 
 protected:
+    //! Initialize for subsequent read
+    //! @param[in] rxFn The function to call when a full packet is received
+    //! @return true if interface was open or opened and transfers ready for read loop
+    virtual bool readInit(const std::function<void(const std::uint8_t*, int)>& rxFn) = 0;
+
+    //! Executes the read loop, blocking until disconnect
+    virtual void readLoop() = 0;
+
+    //! Signal the read loop to stop (non-blocking)
+    virtual void stopRead() = 0;
+
+    //! Close the USB interface
+    //! @return true iff interface was closed
+    virtual bool closeInterface() = 0;
+
+    //! Sends data on the vendor interface
+    //! @param[in] data Buffer to send
+    //! @param[in] length Number of bytes in \p data
+    //! @param[in] timeoutMs Send timeout in milliseconds
+    //! @return true if data was successfully sent
+    virtual bool send(std::uint8_t* data, int length, unsigned int timeoutMs = 1000) = 0;
+
+    //! Packs a packet structure into a vector
+    //! @param[in] addr The return address
+    //! @param[in] cmd The command to set
+    //! @param[in] payload The payload for the command
+    //! @return the packed data
+    static std::vector<std::uint8_t> pack(
+        std::uint64_t addr,
+        std::uint8_t cmd,
+        const std::vector<std::uint8_t>& payload
+    );
+
+    //! Handle received data
+    //! @param[in] buffer Buffer received from libusb
+    //! @param[in] len Number of bytes in buffer received
+    void handleReceive(const std::uint8_t* buffer, int len);
+
+    //! The entrypoint for mProcessThread
+    //! All callbacks are executed from this context
+    void processEntrypoint();
+
+private:
     //! The magic sequence which starts each packet
     static constexpr const std::uint8_t kMagicSequence[] = {0xDB, 0x8B, 0xAF, 0xD5};
     //! The number of bytes in the magic sequence
@@ -225,6 +259,73 @@ protected:
     static const std::uint64_t kMinAddr = 1;
     //! The maximum value for mNextAddr
     static std::uint64_t mMaxAddr;
+
+    //! Holds received bytes not yet parsed into a packet
+    std::vector<std::uint8_t> mReceiveBuffer;
+
+    //! The map entry for callback lookup
+    struct FunctionLookupMapEntry
+    {
+        //! The callback to use when this message is received
+        std::function<void(std::int16_t cmd, std::vector<std::uint8_t>& payload)> callback;
+        //! Iterator into the timeout map which should be removed once the message is received
+        std::multimap<std::chrono::system_clock::time_point, std::uint64_t>::iterator timeoutMapIter;
+    };
+
+    //! The map type which links return address to FunctionLookupMapEntry
+    using FunctionLookupMap = std::unordered_map<std::uint64_t, FunctionLookupMapEntry>;
+
+    //! True when connected, false when disconnected
+    bool mConnected = false;
+    //! The callback to execute when processing thread is exiting
+    std::function<void(std::string& errStr)> mDisconnectCallback;
+    //! The error reason for disconnection
+    std::string mDisconnectReason;
+    //! Serializes access to mDisconnectCallback and mDisconnectReason
+    std::mutex mDisconnectMutex;
+    //! True while processing thread should execute
+    bool mProcessing = false;
+    //! Maps return address to FunctionLookupMapEntry
+    FunctionLookupMap mFnLookup;
+    //! This is used to organize chronologically the timeout values for each key in the above mFnLookup
+    std::multimap<std::chrono::system_clock::time_point, std::uint64_t> mTimeoutLookup;
+    //! Condition variable signaled when data is added to one of the lookups, waited on within mProcessThread
+    std::condition_variable mProcessCv;
+    //! Mutex used to serialize access to mFnLookup, mTimeoutLookup, and mProcessCv
+    std::mutex mProcessMutex;
+    //! Next available return address
+    std::uint64_t mNextAddr = kMinAddr;
+    //! Mutex serializing access to mNextAddr
+    std::mutex mNextAddrMutex;
+    //! The read thread created on connect()
+    std::unique_ptr<std::thread> mReadThread;
+    //! Thread which executes send, receive callback execution, and response timeout callback execution
+    std::unique_ptr<std::thread> mProcessThread;
+    //! Mutex used to serialize connect() and disconnect() calls
+    std::recursive_mutex mConnectionMutex;
+
+    //! Outgoing data structure
+    struct OutgoingData
+    {
+        //! Address embedded in the packet
+        std::uint64_t addr = 0;
+        //! Packet to send
+        std::vector<std::uint8_t> packet;
+    };
+
+    //! Holds data not yet sent
+    std::list<OutgoingData> mOutgoingData;
+
+    //! Holds incoming parsed packet data
+    struct IncomingData
+    {
+        std::uint64_t addr = 0;
+        std::uint8_t cmd = 0;
+        std::vector<std::uint8_t> payload;
+    };
+
+    //! Holds data to be passed to processing callbacks
+    std::list<IncomingData> mIncomingPackets;
 };
 
 }

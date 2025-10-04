@@ -4,7 +4,15 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 
 file(GLOB SRC "${CMAKE_CURRENT_SOURCE_DIR}/*.c*")
 
-add_executable(dream_pico_port_test ${SRC})
+set(CMAKE_SYSTEM_NAME Windows)
+
+# On UWP, build as a GUI app (no console) so it can run as a packaged app.
+# On Desktop Windows and other platforms, keep it as a console app.
+if (CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+    add_executable(dream_pico_port_test WIN32 ${SRC})
+else()
+    add_executable(dream_pico_port_test ${SRC})
+endif()
 target_link_libraries(dream_pico_port_test
   PRIVATE
     dream_pico_port_api

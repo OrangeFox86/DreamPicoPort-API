@@ -487,9 +487,9 @@ void LIBUSB_CALL DppLibusbDeviceImp::onLibusbTransferComplete(libusb_transfer *t
 
 void DppLibusbDeviceImp::transferComplete(libusb_transfer* transfer)
 {
-    if (transfer->status == LIBUSB_TRANSFER_COMPLETED && mRxFn && transfer->actual_length > 0)
+    if (transfer->status == LIBUSB_TRANSFER_COMPLETED && transfer->actual_length > 0)
     {
-        mRxFn(transfer->buffer, transfer->actual_length);
+        handleReceive(transfer->buffer, transfer->actual_length);
         transfer->actual_length = 0;
     }
 
@@ -670,7 +670,7 @@ bool DppLibusbDeviceImp::createTransfers()
     return success;
 }
 
-bool DppLibusbDeviceImp::readInit(const std::function<void(const std::uint8_t*, int)>& rxFn)
+bool DppLibusbDeviceImp::readInit()
 {
     if (!openInterface())
     {
@@ -691,7 +691,6 @@ bool DppLibusbDeviceImp::readInit(const std::function<void(const std::uint8_t*, 
 
     mExitRequested = false;
     mRxStalled = false;
-    mRxFn = rxFn;
 
     // Ready!
     return true;

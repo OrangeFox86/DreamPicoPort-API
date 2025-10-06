@@ -59,7 +59,7 @@ bool DppDeviceImp::connect(const std::function<void(std::string& errStr)>& fn)
         mDisconnectReason.shrink_to_fit();
     }
 
-    if (!readInit([this](const std::uint8_t* buffer, int len){ handleReceive(buffer, len); }))
+    if (!readInit())
     {
         return false;
     }

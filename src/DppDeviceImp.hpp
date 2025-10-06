@@ -199,9 +199,8 @@ public:
 
 protected:
     //! Initialize for subsequent read
-    //! @param[in] rxFn The function to call when a full packet is received
     //! @return true if interface was open or opened and transfers ready for read loop
-    virtual bool readInit(const std::function<void(const std::uint8_t*, int)>& rxFn) = 0;
+    virtual bool readInit() = 0;
 
     //! Executes the read loop, blocking until disconnect
     virtual void readLoop() = 0;

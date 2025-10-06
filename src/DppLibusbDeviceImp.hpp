@@ -253,9 +253,8 @@ public:
     bool send(std::uint8_t* data, int length, unsigned int timeoutMs = 1000) override;
 
     //! Initialize for subsequent run
-    //! @param[in] rxFn The function to call when a full packet is received
     //! @return true if interface was open or opened and transfers ready for run
-    bool readInit(const std::function<void(const std::uint8_t*, int)>& rxFn) override;
+    bool readInit() override;
 
     //! Starts the asynchronous interface and blocks until disconnect
     void readLoop() override;
@@ -355,8 +354,6 @@ private:
     std::uint8_t mEpIn = 0;
     //! The IN endpoint of mInterfaceNumber where bulk data is written
     std::uint8_t mEpOut = 0;
-    //! The function to call whenever a packet is received
-    std::function<void(const std::uint8_t*, int)> mRxFn;
     //! Contains last libusb error data
     LibusbError mLastLibusbError;
     //! Set to true on first connection in order to force reset on subsequent connection

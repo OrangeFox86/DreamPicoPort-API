@@ -26,14 +26,9 @@
     #include "DppLibusbDeviceImp.hpp"
 #else
 #ifdef _WIN32
-    // Include WinRT headers for UWP
-    #include <winrt/base.h>
-    #include <winrt/Windows.Foundation.h>
-    #include <winrt/Windows.Foundation.Collections.h>
-    #include <winrt/Windows.Devices.Usb.h>
-    #include <winrt/Windows.Devices.Enumeration.h>
-    #include <winrt/Windows.Storage.Streams.h>
-    #define HAS_WINRT
+    #include "DppWinRtDeviceImp.hpp"
+#else
+    #error "This OS not supported without libusb"
 #endif
 #endif
 
@@ -316,6 +311,10 @@ std::unique_ptr<DppDevice> DppDevice::find(const Filter& filter)
 
 #ifndef DREAMPICOPORT_NO_LIBUSB
     dppDeviceImp = DppLibusbDeviceImp::find(filter);
+#elif defined(_WIN32)
+    dppDeviceImp = DppWinRtDeviceImp::find(filter);
+#else
+    return nullptr;
 #endif
 
     if (!dppDeviceImp)
@@ -335,6 +334,8 @@ std::uint32_t DppDevice::getCount(const Filter& filter)
 {
 #ifndef DREAMPICOPORT_NO_LIBUSB
     return DppLibusbDeviceImp::getCount(filter);
+#elif defined(_WIN32)
+    return DppWinRtDeviceImp::getCount(filter);
 #else
     return 0;
 #endif

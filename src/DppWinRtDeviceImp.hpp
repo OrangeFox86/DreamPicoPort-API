@@ -119,9 +119,6 @@ private:
         winrt::Windows::Foundation::AsyncStatus status
     );
 
-    static std::wstring makeVidPidStr(std::uint16_t vid, std::uint16_t pid);
-    static winrt::hstring makeSelector(const DppDevice::Filter& filter);
-
 private:
     //! The size in bytes of each libusb transfer
     static const std::size_t kRxSize = 1100;

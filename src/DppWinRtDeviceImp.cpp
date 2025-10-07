@@ -41,6 +41,38 @@ using namespace winrt::Windows::Storage;
 
 namespace dpp_api {
 
+static std::wstring make_vid_pid_str(std::uint16_t vid, std::uint16_t pid)
+{
+    std::wstring vidPidStr = L"VID_";
+
+    // Convert idVendor to 4-digit hex string
+    wchar_t vendorHex[5];
+    swprintf_s(vendorHex, L"%04X", vid);
+    vidPidStr += vendorHex;
+
+    vidPidStr += L"&PID_";
+
+    // Convert idProduct to 4-digit hex string
+    wchar_t productHex[5];
+    swprintf_s(productHex, L"%04X", pid);
+    vidPidStr += productHex;
+
+    return vidPidStr;
+}
+
+static winrt::hstring make_selector(const DppDevice::Filter& filter)
+{
+    // The interface GUID is set on the DreamPicoPort
+    std::wstring deviceSelector =
+        L"System.Devices.InterfaceEnabled:=System.StructuredQueryType.Boolean#True"
+        L" AND " DPP_INTERFACE_CLASS_FILTER_STR
+        L" AND System.Devices.DeviceInstanceId:~<\"USB\\" +
+        make_vid_pid_str(filter.idVendor, filter.idProduct) +
+        L"\"";
+
+    return winrt::hstring(deviceSelector);
+}
+
 DppWinRtDeviceImp::DppWinRtDeviceImp(
     const std::string& serial,
     std::uint32_t bcdVer,
@@ -185,9 +217,17 @@ std::uint8_t DppWinRtDeviceImp::getEpOut() const
     return mEpOut;
 }
 
-std::unique_ptr<DppWinRtDeviceImp> DppWinRtDeviceImp::find(const DppDevice::Filter& filter)
+struct FindResult
 {
-    hstring deviceSelector = makeSelector(filter);
+    std::uint32_t bcdVer;
+    std::string serial;
+    std::string containerId;
+    std::uint32_t count;
+};
+
+FindResult find_dpp_device(const DppDevice::Filter& filter)
+{
+    hstring deviceSelector = make_selector(filter);
     // Find all matching devices
     auto additionalProperties = winrt::single_threaded_vector<winrt::hstring>();
     additionalProperties.Append(L"System.Devices.ContainerId");
@@ -200,7 +240,17 @@ std::unique_ptr<DppWinRtDeviceImp> DppWinRtDeviceImp::find(const DppDevice::Filt
     std::uint32_t count = 0;
     for (const auto& devInfo : deviceInfos)
     {
-        UsbDevice dev = UsbDevice::FromIdAsync(devInfo.Id()).get();
+        UsbDevice dev = nullptr;
+        try
+        {
+            dev = UsbDevice::FromIdAsync(devInfo.Id()).get();
+        }
+        catch(...)
+        {
+            // Likely already in use
+            continue;
+        }
+
         UsbDeviceDescriptor desc = dev.DeviceDescriptor();
         guid containerGuid;
         devInfo.Properties().Lookup(L"System.Devices.ContainerId").as(containerGuid);
@@ -212,7 +262,7 @@ std::unique_ptr<DppWinRtDeviceImp> DppWinRtDeviceImp::find(const DppDevice::Filt
             std::wstring rootSelector =
                 L"System.Devices.InterfaceEnabled:=System.StructuredQueryType.Boolean#True"
                 L" AND System.Devices.DeviceInstanceId:~<\"USB\\" +
-                makeVidPidStr(filter.idVendor, filter.idProduct) +
+                make_vid_pid_str(filter.idVendor, filter.idProduct) +
                 L"\\\"";
 
             auto additionalRootProperties = winrt::single_threaded_vector<winrt::hstring>();
@@ -241,15 +291,29 @@ std::unique_ptr<DppWinRtDeviceImp> DppWinRtDeviceImp::find(const DppDevice::Filt
 
             if (match)
             {
-                if (filter.idx == count)
+                if (filter.idx == count++)
                 {
                     std::wstring containerIdWStr(containerId);
                     std::string containerIdStr(containerIdWStr.begin(), containerIdWStr.end());
-                    return std::make_unique<DppWinRtDeviceImp>(serial, desc.BcdDeviceRevision(), containerIdStr);
+                    return FindResult{desc.BcdDeviceRevision(), serial, containerIdStr, count};
                 }
-                ++count;
             }
         }
+    }
+
+    return FindResult{0, std::string(), std::string(), count};
+}
+
+std::unique_ptr<DppWinRtDeviceImp> DppWinRtDeviceImp::find(const DppDevice::Filter& filter)
+{
+    FindResult findResult = find_dpp_device(filter);
+    if (!findResult.containerId.empty())
+    {
+        return std::make_unique<DppWinRtDeviceImp>(
+            findResult.serial,
+            findResult.bcdVer,
+            findResult.containerId
+        );
     }
 
     return nullptr;
@@ -257,66 +321,11 @@ std::unique_ptr<DppWinRtDeviceImp> DppWinRtDeviceImp::find(const DppDevice::Filt
 
 std::uint32_t DppWinRtDeviceImp::getCount(const DppDevice::Filter& filter)
 {
-    hstring deviceSelector = makeSelector(filter);
-    // Find all matching devices
-    auto additionalProperties = winrt::single_threaded_vector<winrt::hstring>();
-    additionalProperties.Append(L"System.Devices.ContainerId");
-    auto deviceInfos = DeviceInformation::FindAllAsync(
-        deviceSelector,
-        additionalProperties,
-        DeviceInformationKind::DeviceInterface
-    ).get();
+    DppDevice::Filter filterCpy = filter;
+    filterCpy.idx = (std::numeric_limits<std::int32_t>::max)();
+    FindResult findResult = find_dpp_device(filter);
 
-    std::uint32_t count = 0;
-    for (const auto& devInfo : deviceInfos)
-    {
-        UsbDevice dev = UsbDevice::FromIdAsync(devInfo.Id()).get();
-        UsbDeviceDescriptor desc = dev.DeviceDescriptor();
-        if (desc.BcdDeviceRevision() >= filter.minBcdDevice && desc.BcdDeviceRevision() <= filter.maxBcdDevice)
-        {
-            if (filter.serial.empty())
-            {
-                // No serial to match
-                ++count;
-            }
-            else
-            {
-                guid containerGuid;
-                devInfo.Properties().Lookup(L"System.Devices.ContainerId").as(containerGuid);
-                hstring containerId;
-                containerId = winrt::to_hstring(containerGuid);
-
-                std::wstring rootSelector =
-                    L"System.Devices.InterfaceEnabled:=System.StructuredQueryType.Boolean#True"
-                    L" AND System.Devices.DeviceInstanceId:~<\"USB\\" +
-                    makeVidPidStr(filter.idVendor, filter.idProduct) +
-                    L"\\\"";
-
-                auto additionalRootProperties = winrt::single_threaded_vector<winrt::hstring>();
-                additionalRootProperties.Append(L"System.Devices.DeviceInstanceId");
-                auto rootDevInfos = DeviceInformation::FindAllAsync(rootSelector, additionalRootProperties).get();
-
-                if (rootDevInfos.Size() > 0)
-                {
-                    winrt::hstring instId;
-                    rootDevInfos.GetAt(0).Properties().Lookup(L"System.Devices.DeviceInstanceId").as(instId);
-                    std::wstring instIdWStr(instId);
-                    // Extract serial number from device instance ID
-                    size_t backslashPos = instIdWStr.find_last_of(L'\\');
-                    if (backslashPos != std::wstring::npos && backslashPos + 1 < instIdWStr.length())
-                    {
-                        std::wstring serialWide = instIdWStr.substr(backslashPos + 1);
-                        std::string serial = std::string(serialWide.begin(), serialWide.end());
-                        if (serial == filter.serial)
-                        {
-                            ++count;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return count;
+    return findResult.count;
 }
 
 bool DppWinRtDeviceImp::readInit()
@@ -433,38 +442,6 @@ void DppWinRtDeviceImp::transferInComplete(
 
         stopRead();
     }
-}
-
-std::wstring DppWinRtDeviceImp::makeVidPidStr(std::uint16_t vid, std::uint16_t pid)
-{
-    std::wstring vidPidStr = L"VID_";
-
-    // Convert idVendor to 4-digit hex string
-    wchar_t vendorHex[5];
-    swprintf_s(vendorHex, L"%04X", vid);
-    vidPidStr += vendorHex;
-
-    vidPidStr += L"&PID_";
-
-    // Convert idProduct to 4-digit hex string
-    wchar_t productHex[5];
-    swprintf_s(productHex, L"%04X", pid);
-    vidPidStr += productHex;
-
-    return vidPidStr;
-}
-
-winrt::hstring DppWinRtDeviceImp::makeSelector(const DppDevice::Filter& filter)
-{
-    // The interface GUID is set on the DreamPicoPort
-    std::wstring deviceSelector =
-        L"System.Devices.InterfaceEnabled:=System.StructuredQueryType.Boolean#True"
-        L" AND " DPP_INTERFACE_CLASS_FILTER_STR
-        L" AND System.Devices.DeviceInstanceId:~<\"USB\\" +
-        makeVidPidStr(filter.idVendor, filter.idProduct) +
-        L"\"";
-
-    return winrt::hstring(deviceSelector);
 }
 
 } // namespace dpp_api

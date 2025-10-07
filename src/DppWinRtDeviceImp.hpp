@@ -41,7 +41,11 @@ class DppWinRtDeviceImp : public DppDeviceImp
 {
 public:
     //! Constructor
-    DppWinRtDeviceImp(const std::string& containerId);
+    DppWinRtDeviceImp(
+        const std::string& serial,
+        std::uint32_t bcdVer,
+        const std::string& containerId
+    );
 
     //! Virtual destructor
     ~DppWinRtDeviceImp();
@@ -122,7 +126,7 @@ private:
     //! The size in bytes of each libusb transfer
     static const std::size_t kRxSize = 1100;
 
-    std::string mSerial;
+    const std::string mSerial;
     std::array<std::uint8_t, 3> mVersion{0,0,0};
     std::string mLastError;
     mutable std::mutex mLastErrorMutex;

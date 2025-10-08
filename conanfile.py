@@ -18,26 +18,32 @@ class DreamPicoPortConan(ConanFile):
     options = {
         "shared": [True, False],
         "fPIC": [True, False],
-        "tests": [True, False]
+        "tests": [True, False],
+        "with_libusb": [True, False]
     }
     default_options = {
         "shared": False,
         "libusb/*:shared": False,
         "fPIC": True,
-        "tests": False
+        "tests": False,
+        "with_libusb": False
     }
     exports_sources = [
         "CMakeLists.txt",
         "src/*",
         "test/*"
     ]
-    requires = [
-        "libusb/[>=1.0.26 <2.0.0]"
-    ]
+
+    def requirements(self):
+        if self.options.get_safe("with_libusb", True):
+            self.requires("libusb/[>=1.0.26 <2.0.0]")
 
     def config_options(self):
         if self.settings.os == "Windows":
             self.options.rm_safe("fPIC")
+        else:
+            # libusb is required for all other OSes
+            self.options.rm_safe("with_libusb")
 
     def configure(self):
         if self.options.get_safe("shared"):
@@ -47,11 +53,16 @@ class DreamPicoPortConan(ConanFile):
         # This generates "conan_toolchain.cmake" in self.generators_folder
         tc = CMakeToolchain(self)
 
-        tc.variables["DREAMPICOPORT_USE_EXTERNAL_LIBUSB"] = True
-        tc.variables["DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME"] = "libusb"
-        tc.variables["DREAMPICOPORT_LIBUSB_LIBRARY_NAME"] = "libusb::libusb"
         tc.variables["DREAMPICOPORT_API_BUILD_SHARED_LIBS"] = bool(self.options.get_safe("shared", False))
         tc.variables["DREAMPICOPORT_TESTS"] = bool(self.options.get_safe("tests", False))
+
+        if self.options.get_safe("with_libusb", True):
+            tc.variables["DREAMPICOPORT_WITH_LIBUSB"] = True
+            tc.variables["DREAMPICOPORT_USE_EXTERNAL_LIBUSB"] = True
+            tc.variables["DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME"] = "libusb"
+            tc.variables["DREAMPICOPORT_LIBUSB_LIBRARIES"] = "libusb::libusb"
+        else:
+            tc.variables["DREAMPICOPORT_WITH_LIBUSB"] = False
 
         tc.generate()
 
@@ -60,8 +71,9 @@ class DreamPicoPortConan(ConanFile):
         deps.generate()
 
     def build(self):
-        print("***\n*** WARNING: using libusb from conancenter is currently problematic for Windows builds\n***", file=sys.stderr)
-        time.sleep(3)
+        if self.options.get_safe("with_libusb", False) and self.settings.os == "Windows":
+            print("***\n*** WARNING: using libusb from conancenter is currently problematic for Windows builds\n***", file=sys.stderr)
+            time.sleep(3)
         cmake = CMake(self)
         cmake.configure(cli_args=["--no-warn-unused-cli"])
         cmake.build()

@@ -370,11 +370,17 @@ bool DppLibusbDeviceImp::openInterface()
     const libusb_interface *selectedInterface = nullptr;
     for (std::uint8_t i = 0; i < configDescriptor->bNumInterfaces; ++i)
     {
+        // Select the vendor spec interface with the minimum interface number
         const libusb_interface *itf = &configDescriptor->interface[i];
         if (itf->num_altsetting > 0 && itf->altsetting[0].bInterfaceClass == LIBUSB_CLASS_VENDOR_SPEC)
         {
-            selectedInterface = itf;
-            break;
+            if (
+                !selectedInterface ||
+                itf->altsetting->bInterfaceNumber < selectedInterface->altsetting->bInterfaceNumber
+            )
+            {
+                selectedInterface = itf;
+            }
         }
     }
 

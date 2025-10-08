@@ -67,6 +67,10 @@ public:
     //! @param[in] where Explanation of where the error occurred
     void setExternalError(const char* where) override;
 
+    //! Set an internal error message
+    //! @param[in] where Explanation of where the error occurred
+    void setError(const char* where);
+
     //! Retrieve the currently connected interface number (first VENDOR interface)
     //! @return the connected interface number
     int getInterfaceNumber() const override;

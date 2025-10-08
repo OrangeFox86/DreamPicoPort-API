@@ -118,13 +118,22 @@ bool DppWinRtDeviceImp::openInterface()
 {
     if (mDeviceInterfacePath.empty())
     {
+        setError("openInterface() failed - no device interface path found");
         return false;
     }
 
-    mDevice = UsbDevice::FromIdAsync(mDeviceInterfacePath).get();
+    try
+    {
+        mDevice = UsbDevice::FromIdAsync(mDeviceInterfacePath).get();
+    }
+    catch(...)
+    {
+        // continue
+    }
 
     if (!mDevice)
     {
+        setError("openInterface() failed - failed to open interface (already in use?)");
         return false;
     }
 
@@ -132,6 +141,7 @@ bool DppWinRtDeviceImp::openInterface()
     auto configuration = mDevice.Configuration();
     if (!configuration)
     {
+        setError("openInterface() failed - failed to get device configuration");
         return false;
     }
 
@@ -139,8 +149,9 @@ bool DppWinRtDeviceImp::openInterface()
     UsbInterface targetInterface = nullptr;
     if (configuration.UsbInterfaces().Size() <= 0)
     {
-        setExternalError("No interfaces available");
+        setError("No interfaces available");
         mDevice = nullptr;
+        setError("openInterface() failed - no interfaces found on device");
         return false;
     }
     targetInterface = configuration.UsbInterfaces().GetAt(0);
@@ -172,8 +183,14 @@ bool DppWinRtDeviceImp::openInterface()
     }
 
     // Ensure we found both endpoints
-    if (mEpIn == 0 || mEpOut == 0)
+    if (mEpIn == 0)
     {
+        setError("openInterface() failed - could not find IN endpoint");
+        return false;
+    }
+    else if (mEpOut == 0)
+    {
+        setError("openInterface() failed - could not find OUT endpoint");
         return false;
     }
 
@@ -200,6 +217,11 @@ void DppWinRtDeviceImp::setExternalError(const char* where)
 {
     std::lock_guard<std::mutex> lock(mLastErrorMutex);
     mLastError = (where ? where : "");
+}
+
+void DppWinRtDeviceImp::setError(const char* where)
+{
+    setExternalError(where);
 }
 
 int DppWinRtDeviceImp::getInterfaceNumber() const
@@ -386,6 +408,7 @@ bool DppWinRtDeviceImp::send(std::uint8_t* data, int length, unsigned int timeou
     {
         writeOp.Cancel();
         writeOp.get();
+        setError("Write failed");
         return false;
     }
     return true;

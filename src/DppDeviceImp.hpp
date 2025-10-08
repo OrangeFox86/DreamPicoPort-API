@@ -32,6 +32,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <map>
+#include <thread>
 
 namespace dpp_api
 {

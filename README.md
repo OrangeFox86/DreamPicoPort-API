@@ -1,8 +1,6 @@
 # DreamPicoPort-API
 USB-host-side API for host-mode DreamPicoPort
 
-This is currently a work in progress, but it is at least usable.
-
 ## Compiling Using Conan
 
 If [conan](https://conan.io) is installed, it may be used to compile this API. Simply execute the following within this repository's root directory.

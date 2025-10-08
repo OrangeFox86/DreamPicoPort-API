@@ -71,7 +71,7 @@ class DreamPicoPortConan(ConanFile):
         deps.generate()
 
     def build(self):
-        if self.options.get_safe("with_libusb", False) and self.settings.os == "Windows":
+        if self.options.get_safe("with_libusb", True) and self.settings.os == "Windows":
             print("***\n*** WARNING: using libusb from conancenter is currently problematic for Windows builds\n***", file=sys.stderr)
             time.sleep(3)
         cmake = CMake(self)

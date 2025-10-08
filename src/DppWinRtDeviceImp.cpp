@@ -281,7 +281,7 @@ FindResult find_dpp_device(const DppDevice::Filter& filter)
                 if (backslashPos != std::wstring::npos && backslashPos + 1 < instIdWStr.length())
                 {
                     std::wstring serialWide = instIdWStr.substr(backslashPos + 1);
-                    serial = std::string(serialWide.begin(), serialWide.end());
+                    serial = winrt::to_string(serialWide);
                     if (filter.serial.empty() || serial == filter.serial)
                     {
                         match = true;
@@ -294,7 +294,7 @@ FindResult find_dpp_device(const DppDevice::Filter& filter)
                 if (filter.idx == count++)
                 {
                     std::wstring containerIdWStr(containerId);
-                    std::string containerIdStr(containerIdWStr.begin(), containerIdWStr.end());
+                    std::string containerIdStr = winrt::to_string(containerIdWStr);
                     return FindResult{desc.BcdDeviceRevision(), serial, containerIdStr, count};
                 }
             }

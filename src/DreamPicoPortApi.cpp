@@ -50,7 +50,13 @@ namespace dpp_api
 std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::Maple32::get() const
 {
     std::vector<std::uint8_t> packet8;
-    packet8.reserve(packet.size() * 4);
+    packet8.reserve((emu ? 1 : 0) + packet.size() * 4);
+
+    if (emu)
+    {
+        packet8.push_back(0x05);
+    }
+
     for (std::uint32_t word : packet)
     {
         std::uint8_t buffer[4];
@@ -58,7 +64,7 @@ std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::Maple32::get() const
         packet8.insert(packet8.end(), buffer, buffer + 4);
     }
 
-    return std::make_pair('0', std::move(packet8));
+    return std::make_pair(emu ? 'X' : '0', std::move(packet8));
 }
 
 void msg::rx::Maple32::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
@@ -75,7 +81,16 @@ void msg::rx::Maple32::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)
 
 std::pair<std::uint8_t, std::vector<std::uint8_t>> msg::tx::Maple::get() const
 {
-    return std::make_pair('0', packet);
+    std::vector<std::uint8_t> packetCpy;
+    packetCpy.reserve((emu ? 1 : 0) + packet.size());
+
+    if (emu)
+    {
+        packetCpy.push_back(0x05);
+    }
+
+    packetCpy.insert(packetCpy.end(), packet.begin(), packet.end());
+    return std::make_pair(emu ? 'X' : '0', std::move(packetCpy));
 }
 
 void msg::rx::Maple::set(std::int16_t cmd, std::vector<std::uint8_t>& payload)

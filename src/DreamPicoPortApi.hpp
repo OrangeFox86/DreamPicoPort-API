@@ -258,6 +258,9 @@ struct Maple32
     //! The maple payload which contains at least 1 word (MSB is command)
     std::vector<std::uint32_t> packet;
 
+    //! Set to true to send through emulator interface
+    bool emu = false;
+
     //! The expected response type
     using ResponseType = rx::Maple32;
 
@@ -270,6 +273,9 @@ struct Maple
 {
     //! The maple payload which contains at least 4 bytes (first byte is command)
     std::vector<std::uint8_t> packet;
+
+    //! Set to true to send through emulator interface
+    bool emu = false;
 
     //! The expected response type
     using ResponseType = rx::Maple;

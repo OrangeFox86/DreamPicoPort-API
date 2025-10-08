@@ -32,6 +32,7 @@ if (DREAMPICOPORT_WITH_LIBUSB)
 else()
 
   target_compile_definitions(dream_pico_port_api PRIVATE DREAMPICOPORT_NO_LIBUSB)
+  target_link_libraries(dream_pico_port_api PRIVATE WindowsApp)
 
 endif()
 

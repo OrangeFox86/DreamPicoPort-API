@@ -6,8 +6,11 @@ project(dream_pico_port_api
     LANGUAGES CXX
 )
 
-# Currently when this is disabled, the underlying API will be stubbed out
-# In the future, the serial interface could be used instead
+option(DREAMPICOPORT_API_BUILD_SHARED_LIBS "Build Shared Libraries for DreamPicoPort-API" OFF)
+option(DREAMPICOPORT_TESTS "Build tests executable for DreamPicoPort" OFF)
+
+# Setting DREAMPICOPORT_WITH_LIBUSB to OFF is only valid on Windows.
+# When DREAMPICOPORT_WITH_LIBUSB is OFF, winrt is used which is compatible with UWP.
 option(DREAMPICOPORT_WITH_LIBUSB "Use libusb to access DreamPicoPort-API" ON)
 
 if (DREAMPICOPORT_WITH_LIBUSB)
@@ -15,8 +18,6 @@ if (DREAMPICOPORT_WITH_LIBUSB)
     set(DREAMPICOPORT_LIBUSB_INCLUDE_DIRS "" CACHE STRING "Path to libusb include directory, when applicable")
     option(DREAMPICOPORT_USE_EXTERNAL_LIBUSB "Locate libusb using find_package" OFF)
     set(DREAMPICOPORT_EXTERNAL_LIBUSB_PROJECT_NAME "libusb" CACHE STRING "Name of the external libusb project when DREAMPICOPORT_USE_EXTERNAL_LIBUSB is true")
-    option(DREAMPICOPORT_API_BUILD_SHARED_LIBS "Build Shared Libraries for DreamPicoPort-API" OFF)
-    option(DREAMPICOPORT_TESTS "Build tests executable for DreamPicoPort" OFF)
 
     if (DREAMPICOPORT_USE_EXTERNAL_LIBUSB)
         # Use external build of libusb

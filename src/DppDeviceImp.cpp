@@ -59,7 +59,8 @@ bool DppDeviceImp::connect(const std::function<void(std::string& errStr)>& fn)
         mDisconnectReason.shrink_to_fit();
     }
 
-    if (!readInit())
+    ReadInitResult readInitResult = readInit();
+    if (readInitResult == ReadInitResult::kFailure)
     {
         return false;
     }
@@ -68,21 +69,24 @@ bool DppDeviceImp::connect(const std::function<void(std::string& errStr)>& fn)
 
     mProcessing = true;
 
-    mReadThread = std::make_unique<std::thread>(
-        [this]()
-        {
-            readLoop();
-
-            // Save the error description at this point
+    if (readInitResult == ReadInitResult::kSuccessRunLoop)
+    {
+        mReadThread = std::make_unique<std::thread>(
+            [this]()
             {
-                std::lock_guard<std::mutex> lock(mDisconnectMutex);
-                mDisconnectReason = getLastErrorStr();
-            }
+                readLoop();
 
-            // Ensure disconnection
-            disconnect();
-        }
-    );
+                // Save the error description at this point
+                {
+                    std::lock_guard<std::mutex> lock(mDisconnectMutex);
+                    mDisconnectReason = getLastErrorStr();
+                }
+
+                // Ensure disconnection
+                disconnect();
+            }
+        );
+    }
 
     mProcessThread = std::make_unique<std::thread>(
         [this]()
@@ -574,6 +578,16 @@ void DppDeviceImp::processEntrypoint()
     {
         disconnectCallback(disconnectReason);
     }
+}
+
+void DppDeviceImp::readLoop()
+{}
+
+void DppDeviceImp::stopProcessing()
+{
+    std::lock_guard<std::mutex> lock(mProcessMutex);
+    mProcessing = false;
+    mProcessCv.notify_all();
 }
 
 

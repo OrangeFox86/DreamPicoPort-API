@@ -94,10 +94,7 @@ public:
 private:
     //! Initialize for subsequent read
     //! @return true if interface was open or opened and transfers ready for read loop
-    bool readInit() override;
-
-    //! Executes the read loop, blocking until disconnect
-    void readLoop() override;
+    ReadInitResult readInit() override;
 
     //! Signal the read loop to stop (non-blocking)
     void stopRead() override;
@@ -148,9 +145,7 @@ private:
     > mReadOperation = nullptr;
 
     std::mutex mReadMutex;
-    std::condition_variable mReadCv;
     bool mReading = false;
-    bool mStopRequested = false;
 };
 
 }

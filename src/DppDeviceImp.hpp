@@ -199,15 +199,29 @@ public:
     }
 
 protected:
+    //! Return result for readInit()
+    enum class ReadInitResult
+    {
+        //! Failed to initialize, cannot continue
+        kFailure = 0,
+        //! Read initialization was successful, readLoop() should be called
+        kSuccessRunLoop,
+        //! Read initialization was successful and currently running asynchronously
+        kSuccessAsync,
+    };
+
     //! Initialize for subsequent read
     //! @return true if interface was open or opened and transfers ready for read loop
-    virtual bool readInit() = 0;
+    virtual ReadInitResult readInit() = 0;
 
     //! Executes the read loop, blocking until disconnect
-    virtual void readLoop() = 0;
+    virtual void readLoop();
 
     //! Signal the read loop to stop (non-blocking)
     virtual void stopRead() = 0;
+
+    //! Signal the processing thread to stop
+    void stopProcessing();
 
     //! Close the USB interface
     //! @return true iff interface was closed

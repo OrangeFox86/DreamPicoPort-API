@@ -350,42 +350,29 @@ std::uint32_t DppWinRtDeviceImp::getCount(const DppDevice::Filter& filter)
     return findResult.count;
 }
 
-bool DppWinRtDeviceImp::readInit()
+DppDeviceImp::ReadInitResult DppWinRtDeviceImp::readInit()
 {
     if (!openInterface())
     {
-        return false;
+        return ReadInitResult::kFailure;
     }
 
     std::lock_guard<std::mutex> lock(mReadMutex);
-    mStopRequested = false;
     mReading = true;
 
     nextTransferIn();
 
-    return true;
-}
-
-void DppWinRtDeviceImp::readLoop()
-{
-    std::unique_lock<std::mutex> lock(mReadMutex);
-
-    // Nothing actually done here - just for compatibility
-    // TODO: make readLoop optional
-    mReadCv.wait(lock, [this](){return !mReading || mStopRequested;});
-
-    mReading = false;
+    return ReadInitResult::kSuccessAsync;
 }
 
 void DppWinRtDeviceImp::stopRead()
 {
     std::lock_guard<std::mutex> lock(mReadMutex);
-    mStopRequested = true;
     if (mReadOperation)
     {
         mReadOperation.Cancel();
     }
-    mReadCv.notify_all();
+    mReading = false;
 }
 
 bool DppWinRtDeviceImp::closeInterface()
@@ -464,6 +451,7 @@ void DppWinRtDeviceImp::transferInComplete(
         }
 
         stopRead();
+        stopProcessing();
     }
 }
 

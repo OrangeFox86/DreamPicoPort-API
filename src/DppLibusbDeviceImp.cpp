@@ -676,30 +676,30 @@ bool DppLibusbDeviceImp::createTransfers()
     return success;
 }
 
-bool DppLibusbDeviceImp::readInit()
+DppDeviceImp::ReadInitResult DppLibusbDeviceImp::readInit()
 {
     if (!openInterface())
     {
-        return false;
+        return ReadInitResult::kFailure;
     }
 
     // Ensure there are no hanging transfers left in the libusb state machine
     if (!clearTransfers())
     {
-        return false;
+        return ReadInitResult::kFailure;
     }
 
     // Create all new transfers
     if (!createTransfers())
     {
-        return false;
+        return ReadInitResult::kFailure;
     }
 
     mExitRequested = false;
     mRxStalled = false;
 
     // Ready!
-    return true;
+    return ReadInitResult::kSuccessRunLoop;
 }
 
 void DppLibusbDeviceImp::readLoop()

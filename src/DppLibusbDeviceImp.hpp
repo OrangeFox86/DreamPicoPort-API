@@ -254,7 +254,7 @@ public:
 
     //! Initialize for subsequent run
     //! @return true if interface was open or opened and transfers ready for run
-    bool readInit() override;
+    ReadInitResult readInit() override;
 
     //! Starts the asynchronous interface and blocks until disconnect
     void readLoop() override;

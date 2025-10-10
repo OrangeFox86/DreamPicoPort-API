@@ -20,9 +20,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#if defined(_WIN32) && defined(DREAMPICOPORT_NO_LIBUSB)
+#if defined(_WIN32) //&& defined(DREAMPICOPORT_NO_LIBUSB)
 
 #include "DppWinRtDeviceImp.hpp"
+
+#include <future>
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -73,6 +75,33 @@ static winrt::hstring make_selector(const DppDevice::Filter& filter)
     return winrt::hstring(deviceSelector);
 }
 
+//! Safely retrieves the result of an winrt async get()
+//! @tparam T The result type to be retrieved
+//! @param[in] getFn A function executing the async get
+//! @return The retrieved value
+template <typename T>
+static T winrt_async_get(const std::function<T()>& getFn)
+{
+    try
+    {
+        if (winrt::impl::is_sta_thread())
+        {
+            // To avoid assertion check, run within another thread
+            std::future<T> task = std::async(std::launch::async, getFn);
+            return task.get();
+        }
+        else
+        {
+            return getFn();
+        }
+    }
+    catch(const winrt::hresult_error&)
+    {
+        // Execution error occurred
+        return nullptr;
+    }
+}
+
 DppWinRtDeviceImp::DppWinRtDeviceImp(
     const std::string& serial,
     std::uint32_t bcdVer,
@@ -93,12 +122,16 @@ DppWinRtDeviceImp::DppWinRtDeviceImp(
         L" AND " DPP_INTERFACE_CLASS_FILTER_STR;
     IVector<winrt::hstring> additionalProperties = winrt::single_threaded_vector<winrt::hstring>();
     additionalProperties.Append(L"System.Devices.DeviceInstanceId");
-    DeviceInformationCollection deviceInfos =
-        DeviceInformation::FindAllAsync(
-            deviceSelector,
-            additionalProperties,
-            DeviceInformationKind::DeviceInterface
-        ).get();
+    auto deviceInfos = winrt_async_get<DeviceInformationCollection>(
+        [&]()
+        {
+            return DeviceInformation::FindAllAsync(
+                deviceSelector,
+                additionalProperties,
+                DeviceInformationKind::DeviceInterface
+            ).get();
+        }
+    );
 
     // Extract the interface ID
     if (deviceInfos.Size() > 0)
@@ -122,14 +155,12 @@ bool DppWinRtDeviceImp::openInterface()
         return false;
     }
 
-    try
-    {
-        mDevice = UsbDevice::FromIdAsync(mDeviceInterfacePath).get();
-    }
-    catch(...)
-    {
-        // continue
-    }
+    mDevice = winrt_async_get<UsbDevice>(
+        [&]()
+        {
+            return UsbDevice::FromIdAsync(mDeviceInterfacePath).get();
+        }
+    );
 
     if (!mDevice)
     {
@@ -253,21 +284,28 @@ FindResult find_dpp_device(const DppDevice::Filter& filter)
     // Find all matching devices
     auto additionalProperties = winrt::single_threaded_vector<winrt::hstring>();
     additionalProperties.Append(L"System.Devices.ContainerId");
-    auto deviceInfos = DeviceInformation::FindAllAsync(
-        deviceSelector,
-        additionalProperties,
-        DeviceInformationKind::DeviceInterface
-    ).get();
+    auto deviceInfos = winrt_async_get<DeviceInformationCollection>(
+        [&]()
+        {
+            return DeviceInformation::FindAllAsync(
+                deviceSelector,
+                additionalProperties,
+                DeviceInformationKind::DeviceInterface
+            ).get();
+        }
+    );
 
     std::uint32_t count = 0;
     for (const auto& devInfo : deviceInfos)
     {
-        UsbDevice dev = nullptr;
-        try
-        {
-            dev = UsbDevice::FromIdAsync(devInfo.Id()).get();
-        }
-        catch(...)
+        UsbDevice dev = winrt_async_get<UsbDevice>(
+            [&]()
+            {
+                return UsbDevice::FromIdAsync(devInfo.Id()).get();
+            }
+        );
+
+        if (!dev)
         {
             // Likely already in use
             continue;
@@ -289,7 +327,13 @@ FindResult find_dpp_device(const DppDevice::Filter& filter)
 
             auto additionalRootProperties = winrt::single_threaded_vector<winrt::hstring>();
             additionalRootProperties.Append(L"System.Devices.DeviceInstanceId");
-            auto rootDevInfos = DeviceInformation::FindAllAsync(rootSelector, additionalRootProperties).get();
+            auto rootDevInfos = winrt_async_get<DeviceInformationCollection>(
+                [&]()
+                {
+                    return DeviceInformation::FindAllAsync(rootSelector, additionalRootProperties).get();
+                }
+            );
+
             bool match = false;
             std::string serial;
 
@@ -390,15 +434,21 @@ bool DppWinRtDeviceImp::send(std::uint8_t* data, int length, unsigned int timeou
     writeBuf.Length(length);
     memcpy(writeBuf.data(), data, length);
     auto writeOp = mEpOutPipe.OutputStream().WriteAsync(writeBuf);
-    auto status = writeOp.wait_for(std::chrono::milliseconds(timeoutMs));
-    if (status != Windows::Foundation::AsyncStatus::Completed)
-    {
-        writeOp.Cancel();
-        writeOp.get();
-        setError("Write failed");
-        return false;
-    }
-    return true;
+
+    return winrt_async_get<bool>(
+        [&]()
+        {
+            auto status = writeOp.wait_for(std::chrono::milliseconds(timeoutMs));
+            if (status != Windows::Foundation::AsyncStatus::Completed)
+            {
+                writeOp.Cancel();
+                writeOp.get();
+                setError("Write failed");
+                return false;
+            }
+            return true;
+        }
+    );
 }
 
 void DppWinRtDeviceImp::nextTransferIn()

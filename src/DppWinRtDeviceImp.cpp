@@ -433,7 +433,15 @@ bool DppWinRtDeviceImp::send(std::uint8_t* data, int length, unsigned int timeou
     winrt::Windows::Storage::Streams::Buffer writeBuf(length);
     writeBuf.Length(length);
     memcpy(writeBuf.data(), data, length);
-    auto writeOp = mEpOutPipe.OutputStream().WriteAsync(writeBuf);
+    Windows::Foundation::IAsyncOperationWithProgress<uint32_t, uint32_t> writeOp = nullptr;
+    try
+    {
+        writeOp = mEpOutPipe.OutputStream().WriteAsync(writeBuf);
+    }
+    catch (const winrt::hresult_error&)
+    {
+        return false;
+    }
 
     return winrt_async_get<bool>(
         [&]()

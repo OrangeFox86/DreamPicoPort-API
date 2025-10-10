@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#if defined(_WIN32) //&& defined(DREAMPICOPORT_NO_LIBUSB)
+#if defined(_WIN32) && defined(DREAMPICOPORT_NO_LIBUSB)
 
 #include "DppWinRtDeviceImp.hpp"
 

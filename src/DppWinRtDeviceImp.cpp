@@ -316,6 +316,7 @@ FindResult find_dpp_device(const DppDevice::Filter& filter)
         devInfo.Properties().Lookup(L"System.Devices.ContainerId").as(containerGuid);
         hstring containerId;
         containerId = winrt::to_hstring(containerGuid);
+        std::wstring containerIdWStr(containerId);
 
         if (desc.BcdDeviceRevision() >= filter.minBcdDevice && desc.BcdDeviceRevision() <= filter.maxBcdDevice)
         {
@@ -323,7 +324,8 @@ FindResult find_dpp_device(const DppDevice::Filter& filter)
                 L"System.Devices.InterfaceEnabled:=System.StructuredQueryType.Boolean#True"
                 L" AND System.Devices.DeviceInstanceId:~<\"USB\\" +
                 make_vid_pid_str(filter.idVendor, filter.idProduct) +
-                L"\\\"";
+                L"\\\" AND System.Devices.ContainerId:=\"" + containerIdWStr +
+                L"\"";
 
             auto additionalRootProperties = winrt::single_threaded_vector<winrt::hstring>();
             additionalRootProperties.Append(L"System.Devices.DeviceInstanceId");
@@ -342,6 +344,7 @@ FindResult find_dpp_device(const DppDevice::Filter& filter)
                 winrt::hstring instId;
                 rootDevInfos.GetAt(0).Properties().Lookup(L"System.Devices.DeviceInstanceId").as(instId);
                 std::wstring instIdWStr(instId);
+
                 // Extract serial number from device instance ID
                 size_t backslashPos = instIdWStr.find_last_of(L'\\');
                 if (backslashPos != std::wstring::npos && backslashPos + 1 < instIdWStr.length())
@@ -359,7 +362,6 @@ FindResult find_dpp_device(const DppDevice::Filter& filter)
             {
                 if (filter.idx == count++)
                 {
-                    std::wstring containerIdWStr(containerId);
                     std::string containerIdStr = winrt::to_string(containerIdWStr);
                     return FindResult{desc.BcdDeviceRevision(), serial, containerIdStr, count};
                 }
@@ -389,7 +391,7 @@ std::uint32_t DppWinRtDeviceImp::getCount(const DppDevice::Filter& filter)
 {
     DppDevice::Filter filterCpy = filter;
     filterCpy.idx = (std::numeric_limits<std::int32_t>::max)();
-    FindResult findResult = find_dpp_device(filter);
+    FindResult findResult = find_dpp_device(filterCpy);
 
     return findResult.count;
 }

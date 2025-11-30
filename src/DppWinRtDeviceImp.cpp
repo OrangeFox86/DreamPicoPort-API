@@ -197,6 +197,7 @@ bool DppWinRtDeviceImp::openInterface()
         if (mEpIn == 0)
         {
             mEpIn = pipe.EndpointDescriptor().EndpointNumber();
+            pipe.ReadOptions(pipe.ReadOptions() | UsbReadOptions::AutoClearStall);
             mEpInPipe = pipe;
             break;
         }
@@ -208,6 +209,7 @@ bool DppWinRtDeviceImp::openInterface()
         if (mEpOut == 0)
         {
             mEpOut = pipe.EndpointDescriptor().EndpointNumber();
+            pipe.WriteOptions(pipe.WriteOptions() | UsbWriteOptions::AutoClearStall);
             mEpOutPipe = pipe;
             break;
         }

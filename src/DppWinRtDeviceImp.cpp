@@ -25,6 +25,7 @@
 #include "DppWinRtDeviceImp.hpp"
 
 #include <future>
+#include <chrono>
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -77,16 +78,21 @@ static winrt::hstring make_selector(const DppDevice::Filter& filter)
 
 //! Safely retrieves the result of an winrt async get()
 //! @tparam T The result type to be retrieved
-//! @param[in] getFn A function executing the async get
+//! @param[in] getFn A function which both creates an async operation and calls get()
+//! @param[in] defaultVal The default value to return on exception
 //! @return The retrieved value
 template <typename T>
-static T winrt_async_get(const std::function<T()>& getFn)
+static T winrt_async_get(const std::function<T()>& getFn, const T& defaultVal)
 {
     try
     {
+        // Synopsis:
+        // winrt uses the UI message pump when current thread is UI thread. This will usually mean that the asynchronous
+        // operation will rely on messaging. Blocking while on this thread would then cause a deadlock because messages
+        // won't be handled. To avoid that particular case, the async operation will be executed in its own thread so
+        // winrt-internal operations don't rely on the message pump.
         if (winrt::impl::is_sta_thread())
         {
-            // To avoid assertion check, run within another thread
             std::future<T> task = std::async(std::launch::async, getFn);
             return task.get();
         }
@@ -95,11 +101,139 @@ static T winrt_async_get(const std::function<T()>& getFn)
             return getFn();
         }
     }
-    catch(const winrt::hresult_error&)
+    catch(const winrt::hresult_error& e)
     {
         // Execution error occurred
-        return nullptr;
+        return defaultVal;
     }
+}
+
+//! Safely retrieves the result of an winrt async get(), returning nullptr on exception
+//! @tparam T The result type to be retrieved
+//! @param[in] getFn A function which both creates an async operation and calls get()
+//! @return The retrieved value
+template <typename T>
+static T winrt_async_get(const std::function<T()>& getFn)
+{
+    return winrt_async_get<T>(getFn, nullptr);
+}
+
+template <typename T>
+struct winrt_handle_async_data
+{
+    //! The function which generates a IAsyncOperation<T>
+    std::function<winrt::Windows::Foundation::IAsyncOperation<T>()> asyncFn;
+    //! Duration to wait before timeout (statusOut will be set to Canceled on timeout)
+    winrt::Windows::Foundation::TimeSpan timeout = std::chrono::milliseconds(5000);
+};
+
+//! Safely handles a winrt async operation, blocking until complete and returning the result
+//! @tparam T The result type to be retrieved
+//! @param[out] statusOut The status of the operation
+//! @param[in] data Async transfer data
+//! @param[in] defaultVal The default value to return on exception
+//! @return the resulting value of the operation or nullptr if operation fails
+template <typename T>
+static T winrt_handle_async(
+    winrt::Windows::Foundation::AsyncStatus& statusOut,
+    const winrt_handle_async_data<T>& data,
+    const T& defaultVal
+)
+{
+    statusOut = winrt::Windows::Foundation::AsyncStatus::Started;
+    return winrt_async_get<T>(
+        [&]() -> T
+        {
+            winrt::Windows::Foundation::IAsyncOperation<T> asyncOp;
+            try
+            {
+                asyncOp = data.asyncFn();
+                statusOut = asyncOp.wait_for(data.timeout);
+                if (statusOut != winrt::Windows::Foundation::AsyncStatus::Completed)
+                {
+                    statusOut = winrt::Windows::Foundation::AsyncStatus::Canceled;
+                    asyncOp.Cancel();
+                    asyncOp.get();
+                    return defaultVal;
+                }
+                return asyncOp.get();
+
+            }
+            catch(const winrt::hresult_error& e)
+            {
+                // Execution error occurred
+                statusOut = winrt::Windows::Foundation::AsyncStatus::Error;
+                if (asyncOp)
+                {
+                    asyncOp.Cancel();
+                    asyncOp.get();
+                }
+                return defaultVal;
+            }
+        },
+        defaultVal
+    );
+}
+
+//! Safely handles a winrt async operation, blocking until complete and returning the result
+//! @tparam T The result type to be retrieved
+//! @param[out] statusOut The status of the operation
+//! @param[in] data Async transfer data
+//! @return the resulting value of the operation or nullptr if operation fails
+template <typename T>
+static T winrt_handle_async(
+    winrt::Windows::Foundation::AsyncStatus& statusOut,
+    const winrt_handle_async_data<T>& data
+)
+{
+    return winrt_handle_async<T>(statusOut, data, nullptr);
+}
+
+//! Executes a control transfer OUT, blocking until complete, timeout, or error
+//! @param[in] dev winrt UsbDevice to execute the control transfer on
+//! @param[in] setupPacket Control transfer header data
+//! @param[in] dat The data to send
+//! @return a libusb error code
+static bool winrt_send_control_transfer_out(
+    winrt::Windows::Devices::Usb::UsbDevice& dev,
+    const UsbSetupPacket& setupPacket,
+    winrt::array_view<uint8_t> dat = {}
+)
+{
+    if (!dev)
+    {
+        return false;
+    }
+
+    if (setupPacket.RequestType().Direction() != UsbTransferDirection::Out)
+    {
+        return false;
+    }
+
+    winrt::Windows::Foundation::AsyncStatus status;
+    auto dataWriter = Streams::DataWriter();
+    dataWriter.WriteBytes(dat);
+    auto inputBuffer = dataWriter.DetachBuffer();
+    winrt_handle_async_data<uint32_t> outData{
+        [&]() { return dev.SendControlOutTransferAsync(setupPacket, inputBuffer); }
+    };
+
+    uint32_t result = winrt_handle_async<uint32_t>(
+        status,
+        outData,
+        0
+    );
+
+    if (status == winrt::Windows::Foundation::AsyncStatus::Canceled)
+    {
+        return false;
+    }
+    else if (status != winrt::Windows::Foundation::AsyncStatus::Completed || result < dat.size())
+    {
+        return false;
+    }
+
+    return true;
 }
 
 DppWinRtDeviceImp::DppWinRtDeviceImp(
@@ -224,6 +358,22 @@ bool DppWinRtDeviceImp::openInterface()
     else if (mEpOut == 0)
     {
         setError("openInterface() failed - could not find OUT endpoint");
+        return false;
+    }
+
+    // Set up control transfer for connect message (clears buffers)
+    UsbSetupPacket setupPacket;
+    setupPacket.RequestType().Direction(UsbTransferDirection::Out);
+    setupPacket.RequestType().ControlTransferType(UsbControlTransferType::Class);
+    setupPacket.RequestType().Recipient(UsbControlRecipient::SpecifiedInterface);
+    setupPacket.Request(0x22);
+    setupPacket.Value(0x01);
+    setupPacket.Index(mInterfaceNumber);
+    setupPacket.Length(0);
+
+    if (!winrt_send_control_transfer_out(mDevice, setupPacket))
+    {
+        setError("openInterface() failed - failed to send initial control transfer for connection");
         return false;
     }
 
@@ -426,6 +576,23 @@ void DppWinRtDeviceImp::stopRead()
 bool DppWinRtDeviceImp::closeInterface()
 {
     stopRead();
+    if (mDevice)
+    {
+        // Set up control transfer for disconnect message (clears buffers)
+        UsbSetupPacket setupPacket;
+        setupPacket.RequestType().Direction(UsbTransferDirection::Out);
+        setupPacket.RequestType().ControlTransferType(UsbControlTransferType::Class);
+        setupPacket.RequestType().Recipient(UsbControlRecipient::SpecifiedInterface);
+        setupPacket.Request(0x22);
+        setupPacket.Value(0x00);
+        setupPacket.Index(mInterfaceNumber);
+        setupPacket.Length(0);
+
+        if (!winrt_send_control_transfer_out(mDevice, setupPacket))
+        {
+            setError("closeInterface() failed - failed to send control transfer for disconnection");
+        }
+    }
     mEpInPipe = nullptr;
     mEpOutPipe = nullptr;
     mDevice = nullptr;

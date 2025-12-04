@@ -37,6 +37,7 @@
 #include <mutex>
 #include <functional>
 #include <algorithm>
+#include <unordered_map>
 
 namespace dpp_api
 {

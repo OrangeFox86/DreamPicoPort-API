@@ -37,6 +37,7 @@
 #include <mutex>
 #include <functional>
 #include <algorithm>
+#include <unordered_map>
 
 namespace dpp_api
 {
@@ -168,7 +169,6 @@ class LibusbError
 {
 public:
     LibusbError() = default;
-    LibusbError(const LibusbError&) = default;
     LibusbError(LibusbError&&) = default;
 
     //! Save the error data

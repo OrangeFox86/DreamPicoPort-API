@@ -168,8 +168,15 @@ class LibusbError
 {
 public:
     LibusbError() = default;
-    LibusbError(const LibusbError&) = default;
-    LibusbError(LibusbError&&) = default;
+    virtual ~LibusbError() = default;
+
+    //! Copy constructor
+    //! @param[in] rhs The right-hand-side object to copy from
+    inline LibusbError(const LibusbError& rhs) :
+        mLastLibusbError(rhs.mLastLibusbError),
+        mWhere(rhs.mWhere),
+        mMutex()
+    {}
 
     //! Save the error data
     //! @param[in] libusbError The libusb error number

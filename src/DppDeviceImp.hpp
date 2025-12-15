@@ -33,6 +33,7 @@
 #include <chrono>
 #include <map>
 #include <thread>
+#include <unordered_map>
 
 namespace dpp_api
 {

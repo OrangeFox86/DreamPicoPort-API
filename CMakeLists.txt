@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(dream_pico_port_api
     DESCRIPTION "API for DreamPicoPort hardware"
-    VERSION "1.0.3"
+    VERSION "1.0.4"
     LANGUAGES CXX
 )
 

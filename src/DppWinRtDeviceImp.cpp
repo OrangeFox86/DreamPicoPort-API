@@ -558,6 +558,40 @@ DppDeviceImp::ReadInitResult DppWinRtDeviceImp::readInit()
     std::lock_guard<std::mutex> lock(mReadMutex);
     mReading = true;
 
+    // Blocking read for 25 ms to clear out anything stuck in the read buffer or initial halt
+    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+    const std::chrono::system_clock::time_point readDeadline = now + std::chrono::milliseconds(25);
+    while (now < readDeadline)
+    {
+        int transferred = 0;
+        unsigned char dummyBuff[512];
+        std::chrono::milliseconds timeout = std::chrono::duration_cast<std::chrono::milliseconds>(readDeadline - now);
+
+        bool readResult = winrt_async_get<bool>(
+            [&]()
+            {
+                auto status = mEpInPipe.InputStream().ReadAsync(
+                    mReadBuffer,
+                    kRxSize,
+                    Streams::InputStreamOptions::Partial | Streams::InputStreamOptions::ReadAhead
+                ).wait_for(std::chrono::milliseconds(timeout));
+                if (status == Windows::Foundation::AsyncStatus::Error)
+                {
+                    return false;
+                }
+                return true;
+            }
+        );
+
+        if (!readResult)
+        {
+            setError("Initial read failed");
+            return ReadInitResult::kFailure;
+        }
+
+        now = std::chrono::system_clock::now();
+    }
+
     nextTransferIn();
 
     return ReadInitResult::kSuccessAsync;

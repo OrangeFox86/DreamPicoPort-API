@@ -33,6 +33,7 @@
 #include <mutex>
 #include <functional>
 #include <algorithm>
+#include <chrono>
 
 namespace dpp_api
 {
@@ -687,6 +688,47 @@ DppDeviceImp::ReadInitResult DppLibusbDeviceImp::readInit()
     if (!clearTransfers())
     {
         return ReadInitResult::kFailure;
+    }
+
+    // Blocking read for 25 ms to clear out anything stuck in the read buffer or initial halt
+    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+    const std::chrono::system_clock::time_point readDeadline = now + std::chrono::milliseconds(25);
+    while (now < readDeadline)
+    {
+        int transferred = 0;
+        unsigned char dummyBuff[512];
+        const unsigned int timeoutMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(readDeadline - now).count();
+
+        int xferResult = libusb_bulk_transfer(
+            mLibusbDeviceHandle.get(),
+            mEpIn,
+            dummyBuff,
+            static_cast<int>(sizeof(dummyBuff)),
+            &transferred,
+            timeoutMs
+        );
+
+        if (xferResult == LIBUSB_ERROR_PIPE)
+        {
+            xferResult = libusb_clear_halt(mLibusbDeviceHandle.get(), mEpIn);
+            if (xferResult != LIBUSB_SUCCESS)
+            {
+                mLastLibusbError.saveError(xferResult, "libusb_clear_halt on readInit");
+                return ReadInitResult::kFailure;
+            }
+        }
+        else if (
+            xferResult != LIBUSB_SUCCESS &&
+            xferResult != LIBUSB_ERROR_TIMEOUT &&
+            xferResult != LIBUSB_ERROR_OVERFLOW
+        )
+        {
+            mLastLibusbError.saveError(xferResult, "libusb_bulk_transfer on readInit");
+            return ReadInitResult::kFailure;
+        }
+
+        now = std::chrono::system_clock::now();
     }
 
     // Create all new transfers

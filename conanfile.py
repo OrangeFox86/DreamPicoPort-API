@@ -7,7 +7,7 @@ import time
 
 class DreamPicoPortConan(ConanFile):
     name = "dream_pico_port_api"
-    version = "1.0.4"
+    version = "1.0.5"
     package_type = "library"
     license = "MIT"
     author = "James M Smith"

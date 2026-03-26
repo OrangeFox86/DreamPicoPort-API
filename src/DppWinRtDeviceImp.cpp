@@ -26,6 +26,7 @@
 
 #include <future>
 #include <chrono>
+#include <type_traits>
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -43,6 +44,19 @@ using namespace winrt::Windows::Storage;
 #define DPP_INTERFACE_CLASS_FILTER_STR L"System.Devices.InterfaceClassGuid:=\"{31C4F7D3-1AF2-4AD0-B461-3A760CBBD4FB}\""
 
 namespace dpp_api {
+
+//! Helper to provide the correct "null" default value for a type.
+//! C++/WinRT projected types (classes) are best initialized with nullptr, 
+//! while primitive types (int, bool, etc.) must use T{} since they don't 
+//! support nullptr. This distinction is enforced more strictly in C++20.
+template <typename T>
+static constexpr T get_winrt_default()
+{
+    if constexpr (std::is_convertible_v<std::nullptr_t, T>)
+        return nullptr;
+    else
+        return T{};
+}
 
 static std::wstring make_vid_pid_str(std::uint16_t vid, std::uint16_t pid)
 {
@@ -115,7 +129,7 @@ static T winrt_async_get(const std::function<T()>& getFn, const T& defaultVal)
 template <typename T>
 static T winrt_async_get(const std::function<T()>& getFn)
 {
-    return winrt_async_get<T>(getFn, nullptr);
+    return winrt_async_get<T>(getFn, get_winrt_default<T>());
 }
 
 template <typename T>
@@ -186,7 +200,7 @@ static T winrt_handle_async(
     const winrt_handle_async_data<T>& data
 )
 {
-    return winrt_handle_async<T>(statusOut, data, nullptr);
+    return winrt_handle_async<T>(statusOut, data, get_winrt_default<T>());
 }
 
 //! Executes a control transfer OUT, blocking until complete, timeout, or error

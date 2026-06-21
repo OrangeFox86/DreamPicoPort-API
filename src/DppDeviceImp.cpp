@@ -155,7 +155,7 @@ bool DppDeviceImp::disconnect()
 
 bool DppDeviceImp::isConnected()
 {
-    return mConnected;
+    return mConnected && mProcessing;
 }
 
 std::uint64_t DppDeviceImp::send(
